@@ -1,6 +1,8 @@
 # agent-vm 0.3, the Go binary, with Lima built in from third_party/.
 #
 #   make              _output/bin/agent-vm, with the guest agent and templates
+#   make install      build it, then link it onto the PATH (AGENT_VM_BIN_DIR
+#                     to choose where; ~/.local/bin by default)
 #   make limactl      Lima's own limactl from third_party/, for debugging
 #   make test         the Go tests
 #   make check-windows      the Windows build and tests compile and vet, from any OS
@@ -45,7 +47,7 @@ CGO_ENABLED ?= 0
 endif
 GO_BUILD := CGO_ENABLED=$(CGO_ENABLED) $(GO) build -trimpath -tags $(TAGS) -ldflags "$(LDFLAGS)"
 
-.PHONY: all agent-vm limactl assets test test-go check-windows test-third-party check-third-party fuzz clean
+.PHONY: all agent-vm install limactl assets test test-go check-windows test-third-party check-third-party fuzz clean
 
 all: agent-vm
 
@@ -54,6 +56,11 @@ agent-vm: assets
 ifeq ($(GOOS),darwin)
 	codesign -f -v --entitlements third_party/lima/vz.entitlements -s - _output/bin/agent-vm
 endif
+
+# For developers: the binary install puts on the PATH, with its own
+# wording, replacement of earlier installs and next steps.
+install: agent-vm
+	./_output/bin/agent-vm$(EXE) install
 
 limactl:
 	$(GO_BUILD) -o _output/bin/limactl$(EXE) github.com/lima-vm/lima/v2/cmd/limactl
