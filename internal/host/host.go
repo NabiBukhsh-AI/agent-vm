@@ -26,15 +26,26 @@ var MemGiB = func() int { return int(memory.TotalMemory() >> 30) }
 
 var positiveRe = regexp.MustCompile(`^[1-9][0-9]*$`)
 
+// Divisor is the number the host's resources are divided by to get a VM's
+// share: AGENT_VM_HOST_SHARE, or 2 when it is unset or is not a positive
+// integer. In the second case invalid is true and bad is what the variable
+// holds.
+func Divisor() (div int, bad string, invalid bool) {
+	s, ok := os.LookupEnv("AGENT_VM_HOST_SHARE")
+	if !ok {
+		return 2, "", false
+	}
+	if n, err := strconv.Atoi(s); err == nil && positiveRe.MatchString(s) {
+		return n, "", false
+	}
+	return 2, s, true
+}
+
 // share is the share of total this host gives a VM, never below floor.
 func share(total, floor int, warn io.Writer) int {
-	div := 2
-	if s, ok := os.LookupEnv("AGENT_VM_HOST_SHARE"); ok {
-		if n, err := strconv.Atoi(s); err == nil && positiveRe.MatchString(s) {
-			div = n
-		} else {
-			fmt.Fprintf(warn, "Warning: AGENT_VM_HOST_SHARE='%s' is not a positive integer; using 2.\n", s)
-		}
+	div, bad, invalid := Divisor()
+	if invalid {
+		fmt.Fprintf(warn, "Warning: AGENT_VM_HOST_SHARE='%s' is not a positive integer; using 2.\n", bad)
 	}
 	return max(total/div, floor)
 }

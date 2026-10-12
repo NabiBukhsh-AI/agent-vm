@@ -1,9 +1,41 @@
 package reversesshfs
 
 import (
+	"os"
+	"os/exec"
 	"runtime"
 	"testing"
+	"time"
 )
+
+// TestHelperProcess is a child that waits to be killed, for TestCloseReaps.
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("REVERSESSHFS_TEST_SLEEP") == "" {
+		return
+	}
+	time.Sleep(time.Minute)
+}
+
+// Close kills the processes and reaps them: a killed child left unwaited stays a zombie, with its pipes.
+func TestCloseReaps(t *testing.T) {
+	start := func() *exec.Cmd {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
+		cmd.Env = append(os.Environ(), "REVERSESSHFS_TEST_SLEEP=1")
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return cmd
+	}
+	rsf := &ReverseSSHFS{sshCmd: start(), opensshSftpServerCmd: start()}
+	if err := rsf.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []*exec.Cmd{rsf.sshCmd, rsf.opensshSftpServerCmd} {
+		if cmd.ProcessState == nil {
+			t.Error("a killed process was not waited for")
+		}
+	}
+}
 
 func TestAddQuotes(t *testing.T) {
 	type testCase struct {

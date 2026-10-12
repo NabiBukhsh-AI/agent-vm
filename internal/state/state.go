@@ -4,6 +4,7 @@
 package state
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,11 +18,16 @@ import (
 // Dir is the state folder.
 type Dir string
 
-// Default is $AGENT_VM_STATE_DIR, or ~/.agent-vm, spelled as paths.Host
-// does.
+// Default is $AGENT_VM_STATE_DIR, made absolute so that the checks that keep
+// shares away from it compare real locations, or ~/.agent-vm, spelled as
+// paths.Host does.
 func Default() (Dir, error) {
 	if d := os.Getenv("AGENT_VM_STATE_DIR"); d != "" {
-		return Dir(paths.Host(d)), nil
+		abs, err := filepath.Abs(d)
+		if err != nil {
+			return "", err
+		}
+		return Dir(paths.Host(abs)), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -45,6 +51,7 @@ const (
 	MountsOf     = ".agent-vm-mounts-"      // 0.2's record of its shares: only removed now
 	CacheOf      = ".agent-vm-sshfs-cache-" // 0.2's record of sshfs's cache: only removed now
 	ScratchOf    = ".agent-vm-scratch-"     // a --scratch run, with its pid
+	PolicyOf     = ".agent-vm-policy-"      // fingerprint of the network and guarded policies it booted with
 )
 
 // The base template's markers. BaseVersion, written last by setup, says it
@@ -59,17 +66,45 @@ func (d Dir) Marker(kind, vm string) string {
 	return d.Path(kind + vm)
 }
 
-// Read is a marker's content, without its trailing newline, "" when there
-// is none.
-func (d Dir) Read(path string) string {
-	b, err := os.ReadFile(path)
+// Read is the content of name in the folder, without its trailing newline,
+// "" when there is none.
+func (d Dir) Read(name string) string {
+	b, err := os.ReadFile(d.Path(name))
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSuffix(string(b), "\n")
 }
 
-var markers = []string{VersionOf, BuiltByOf, SSHFSOf, TermOf, FileMountsOf, MountsOf, CacheOf, ScratchOf}
+// Write replaces name in the folder, made if need be, through a temporary
+// file renamed over it: a reader sees the old content or the new, never part
+// of it. The temporary name does not start like a marker's.
+func (d Dir) Write(name string, data []byte) error {
+	if err := os.MkdirAll(string(d), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(string(d), ".tmp-"+name+"-*")
+	if err != nil {
+		return err
+	}
+	_, werr := tmp.Write(data)
+	if err := errors.Join(werr, tmp.Chmod(0o644), tmp.Close()); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), d.Path(name)); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
+}
+
+// ReadMarker is Read for a marker of vm.
+func (d Dir) ReadMarker(kind, vm string) string {
+	return d.Read(kind + vm)
+}
+
+var markers = []string{VersionOf, BuiltByOf, SSHFSOf, TermOf, FileMountsOf, MountsOf, CacheOf, ScratchOf, PolicyOf}
 
 // Rename moves what is known of the VM from to its new name to: its
 // markers, and its staged single files (its shares are set again before it
@@ -81,7 +116,7 @@ func (d Dir) Rename(from, to string) error {
 			last = err
 		}
 	}
-	if err := os.Rename(filepath.Join(string(d), "file-mounts", from), filepath.Join(string(d), "file-mounts", to)); err != nil && !os.IsNotExist(err) {
+	if err := os.Rename(d.Path(filepath.Join("file-mounts", from)), d.Path(filepath.Join("file-mounts", to))); err != nil && !os.IsNotExist(err) {
 		last = err
 	}
 	return last
@@ -96,7 +131,7 @@ func (d Dir) Forget(vm, template string) error {
 			last = err
 		}
 	}
-	if err := os.RemoveAll(filepath.Join(string(d), "file-mounts", vm)); err != nil {
+	if err := os.RemoveAll(d.Path(filepath.Join("file-mounts", vm))); err != nil {
 		last = err
 	}
 	if vm == template {
@@ -116,9 +151,9 @@ var builtByRe = regexp.MustCompile(`^[0-9A-Za-z.+-]+$`)
 // describes itself. 0.1.0 recorded no version: a base without one was built
 // by it.
 func (d Dir) BaseLabel(vm, template string) string {
-	verFile, byFile := d.Marker(VersionOf, vm), d.Marker(BuiltByOf, vm)
+	verFile, byFile := VersionOf+vm, BuiltByOf+vm
 	if vm == template {
-		verFile, byFile = d.Path(BaseVersion), d.Path(BaseBuiltBy)
+		verFile, byFile = BaseVersion, BaseBuiltBy
 	}
 	by := d.Read(byFile)
 	if !builtByRe.MatchString(by) {

@@ -55,6 +55,9 @@ func Run(args []string) bool {
 	}
 	usernet.Outbound = policy.Allows
 	if len(policy.Domains) > 0 {
+		// Both resolvers the guest can reach: the gateway's, which every
+		// query gets whatever the guest's iptables say, and the hostagent's.
+		usernet.Names, usernet.Answered = policy.Name, policy.Answered
 		dns.Names, dns.Answered = policy.Name, policy.Answered
 	}
 	// The user is asked before the VM changes a file their machine runs on

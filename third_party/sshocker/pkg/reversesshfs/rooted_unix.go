@@ -15,6 +15,10 @@ import (
 
 var errDenied error = unix.EACCES
 
+// lexicalGuard: Guard is asked about the path as the client sent it, and compares it folded (see FoldName).
+// On Windows the names are asked after the handles are open instead.
+const lexicalGuard = true
+
 // openNonblock: see openRead.
 const openNonblock = unix.O_NONBLOCK
 
@@ -89,7 +93,7 @@ func (h *rootedHandlers) openParent(rel string) (int, string, error) {
 }
 
 func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
-	rel, err := h.writableRel(r.Filepath)
+	rel, err := h.writableRel(r.Filepath, false)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +148,7 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
 
 // inParent calls f with the parent directory fd and the base name of the writable path p.
 func (h *rootedHandlers) inParent(op, p string, f func(dirfd int, base string) error) error {
-	rel, err := h.writableRel(p)
+	rel, err := h.writableRel(p, true)
 	if err != nil {
 		return err
 	}
@@ -172,7 +176,7 @@ func (h *rootedHandlers) remove(r *sftp.Request) error {
 func (h *rootedHandlers) mkdir(r *sftp.Request) error {
 	var mode uint32 = 0o755
 	if a := r.Attributes(); a != nil && r.AttrFlags().Permissions {
-		mode = a.Mode & 0o7777
+		mode = a.Mode & permMask
 	}
 	return h.inParent("mkdir", r.Filepath, func(dirfd int, base string) error {
 		return unix.Mkdirat(dirfd, base, mode)
@@ -210,11 +214,11 @@ func (h *rootedHandlers) rename(r *sftp.Request, noReplace bool) error {
 }
 
 func (h *rootedHandlers) twoPaths(oldPath, newPath string, f func(oldfd int, oldBase string, newfd int, newBase string) error) error {
-	oldRel, err := h.writableRel(oldPath)
+	oldRel, err := h.writableRel(oldPath, true)
 	if err != nil {
 		return err
 	}
-	newRel, err := h.writableRel(newPath)
+	newRel, err := h.writableRel(newPath, true)
 	if err != nil {
 		return err
 	}
@@ -235,7 +239,7 @@ func (h *rootedHandlers) twoPaths(oldPath, newPath string, f func(oldfd int, old
 }
 
 func (h *rootedHandlers) setstat(r *sftp.Request) error {
-	rel, err := h.writableRel(r.Filepath)
+	rel, err := h.writableRel(r.Filepath, false)
 	if err != nil {
 		return err
 	}
@@ -261,7 +265,7 @@ func (h *rootedHandlers) setstat(r *sftp.Request) error {
 		}
 	}
 	if flags.Permissions {
-		if err := fchmodatNoFollow(dirfd, base, attrs.Mode&0o7777); err != nil {
+		if err := fchmodatNoFollow(dirfd, base, attrs.Mode&permMask); err != nil {
 			return &os.PathError{Op: "chmod", Path: r.Filepath, Err: err}
 		}
 	}
@@ -296,7 +300,7 @@ func (h *rootedHandlers) fsetstat(f *os.File, r *sftp.Request) error {
 		}
 	}
 	if flags.Permissions {
-		if err := unix.Fchmod(fd, attrs.Mode&0o7777); err != nil {
+		if err := unix.Fchmod(fd, attrs.Mode&permMask); err != nil {
 			return &os.PathError{Op: "chmod", Path: f.Name(), Err: err}
 		}
 	}

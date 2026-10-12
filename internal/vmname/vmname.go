@@ -88,8 +88,10 @@ func Scratch(dir string) (string, error) {
 	return fit(name, "-scratch-"+hex.EncodeToString(b[:])), nil
 }
 
-// IsScratch reports whether name is one Scratch makes: those are deleted
-// unasked when left over.
+// IsScratch reports whether name looks like one Scratch makes. It only
+// looks like it: a project folder named "x-scratch" gets a VM named
+// "x-scratch-<hash>", which matches. Deleting a VM unasked takes more than
+// the name, a marker of a --scratch run (state.ScratchOf).
 func IsScratch(name string) bool {
 	return scratchRe.MatchString(name)
 }

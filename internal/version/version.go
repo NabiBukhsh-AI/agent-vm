@@ -7,12 +7,16 @@ import "strings"
 // `agent-vm version --min`.
 var Version = "0.3.0-dev"
 
-// AtLeast reports whether version have is want or later. Only the numbers
-// count: a suffix after "-" is dropped, and so is anything but digits in a
-// component. A missing component is 0, so 1.2 is 1.2.0.
+// AtLeast reports whether version have is want or later. The numbers before
+// any "-" compare first, anything but digits in a component dropped, a
+// missing component being 0 (1.2 is 1.2.0). With equal numbers, a version
+// with a suffix after "-" is a prerelease and is older than the same
+// without: 0.3.0-dev, as 0.3.0-dev.<commit> from a development build, does
+// not satisfy 0.3.0. Two prereleases compare identifier by identifier, as
+// semver does.
 func AtLeast(have, want string) bool {
-	a, _, _ := strings.Cut(have, "-")
-	b, _, _ := strings.Cut(want, "-")
+	a, apre, _ := strings.Cut(have, "-")
+	b, bpre, _ := strings.Cut(want, "-")
 	for a != "" || b != "" {
 		var x, y string
 		x, a, _ = strings.Cut(a, ".")
@@ -25,7 +29,50 @@ func AtLeast(have, want string) bool {
 			return x > y
 		}
 	}
-	return true
+	switch {
+	case bpre == "":
+		return apre == ""
+	case apre == "":
+		return true
+	}
+	return comparePre(apre, bpre) >= 0
+}
+
+// comparePre orders two prerelease strings: dot-separated identifiers, the
+// numeric ones as numbers and lower than the others, which compare as text;
+// a longer list is higher when the shorter is its start.
+func comparePre(a, b string) int {
+	for a != "" || b != "" {
+		if a == "" {
+			return -1
+		}
+		if b == "" {
+			return 1
+		}
+		var x, y string
+		x, a, _ = strings.Cut(a, ".")
+		y, b, _ = strings.Cut(b, ".")
+		xn, yn := isNumeric(x), isNumeric(y)
+		switch {
+		case xn && yn:
+			x, y = strings.TrimLeft(x, "0"), strings.TrimLeft(y, "0")
+			if len(x) != len(y) {
+				return len(x) - len(y)
+			}
+		case xn:
+			return -1
+		case yn:
+			return 1
+		}
+		if c := strings.Compare(x, y); c != 0 {
+			return c
+		}
+	}
+	return 0
+}
+
+func isNumeric(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
 }
 
 // number is the digits of s, without leading zeros: compared by length,

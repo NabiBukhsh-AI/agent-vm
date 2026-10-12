@@ -48,9 +48,7 @@ func FuzzEntries(f *testing.F) {
 			if e.Mode != "ro" && e.Mode != "rw" {
 				t.Fatalf("%q: mode %q", content, e.Mode)
 			}
-			if _, bad := UnsafeLocation(e.Src, refs); bad {
-				t.Fatalf("%q: unsafe source %q kept", content, e.Src)
-			}
+			checkSafe(t, content, s, e)
 			mp := e.Dst
 			if mp == "" {
 				mp = e.Src
@@ -70,6 +68,51 @@ func FuzzEntries(f *testing.F) {
 	})
 }
 
+// checkSafe is the oracle for FuzzEntries, written apart from UnsafeLocation
+// and GitDirShare: on the physical path of the source, nothing is the home
+// folder, above it, or the state folder or inside it, a writable folder is
+// not a repository's own or inside one, nor under .git or .hg.
+func checkSafe(t *testing.T, content string, s sandbox, e Entry) {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(e.Src)
+	if err != nil {
+		t.Fatalf("%q: %q: %v", content, e.Src, err)
+	}
+	rel := func(base, p string) (string, bool) {
+		r, err := filepath.Rel(base, p)
+		return r, err == nil && r != ".." && !strings.HasPrefix(r, "../")
+	}
+	home, _ := filepath.EvalSymlinks(s.home)
+	state, _ := filepath.EvalSymlinks(s.state)
+	if _, in := rel(real, home); in {
+		t.Fatalf("%q: %q is or contains the home folder", content, e.Src)
+	}
+	if _, in := rel(state, real); in {
+		t.Fatalf("%q: %q is the state folder or inside it", content, e.Src)
+	}
+	if e.Mode != "rw" {
+		return
+	}
+	if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+		return
+	}
+	for a := real; ; a = filepath.Dir(a) {
+		if _, err := os.Stat(a + "/HEAD"); err == nil {
+			if _, err := os.Stat(a + "/objects"); err == nil {
+				if _, err := os.Stat(a + "/refs"); err == nil {
+					t.Fatalf("%q: writable %q is inside the repository folder %q", content, e.Src, a)
+				}
+			}
+		}
+		if n := filepath.Base(a); strings.EqualFold(n, ".git") || strings.EqualFold(n, ".hg") {
+			t.Fatalf("%q: writable %q is under %s", content, e.Src, n)
+		}
+		if filepath.Dir(a) == a {
+			break
+		}
+	}
+}
+
 // A filter with non-ASCII characters matches as written (0.3 took each byte
 // of é for a character before this test). A backslash escapes elsewhere,
 // and separates on Windows: both spellings, on every host.
@@ -77,6 +120,7 @@ func TestMatchesNonASCII(t *testing.T) {
 	for _, win := range []bool{false, true} {
 		old := paths.Windows
 		paths.Windows = func() bool { return win }
+		t.Cleanup(func() { paths.Windows = old })
 		wantEscape := !win
 		for _, c := range []struct {
 			filter, dir string
@@ -91,7 +135,6 @@ func TestMatchesNonASCII(t *testing.T) {
 				t.Errorf("windows=%v Matches(%q, %q) = %v", win, c.filter, c.dir, got)
 			}
 		}
-		paths.Windows = old
 	}
 }
 

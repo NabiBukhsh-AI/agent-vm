@@ -96,15 +96,15 @@ func TestSetupPreinstall(t *testing.T) {
 		}
 	}
 	te, code, _ := setupRun(t, "--preinstall=Claude")
-	if code != 1 || !strings.Contains(te.out(), "Unknown preinstall name: Claude (names are lowercase)") {
+	if code != exitUsage || !strings.Contains(te.out(), "Unknown preinstall name: Claude (names are lowercase)") {
 		t.Errorf("unknown name: %s", te.out())
 	}
 	te, code, _ = setupRun(t, "--reset")
-	if code != 1 || !strings.Contains(te.out(), "Unknown option: --reset") {
+	if code != exitUsage || !strings.Contains(te.out(), "Unknown option: --reset") {
 		t.Errorf("--reset: %s", te.out())
 	}
 	for _, args := range [][]string{{"--rm"}, {"--scratch"}, {"--ssh-port=2222"}, {"--disk", "10G"}, {"--disk"}, {"--unsafe-writable-git"}, {"--unsafe-disable-security-prompts"}} {
-		if te, code, _ = setupRun(t, args...); code != 1 || te.fake.CallLog() != "" {
+		if te, code, _ = setupRun(t, args...); code != exitUsage || te.fake.CallLog() != "" {
 			t.Errorf("%q: %d %s", args, code, te.out())
 		}
 	}
@@ -206,8 +206,8 @@ func TestSetupFailures(t *testing.T) {
 	// A base that does not stop is not marked ready: Lima clones only a
 	// stopped one.
 	te := newTestEnv(t, vmtest.New())
-	te.fake.Sticky[vmname.Template] = true
-	if te.setupBase([]string{"setup", "--preinstall=none"}) != 1 || !strings.Contains(te.out(), "the base VM is set up but did not stop") {
+	te.fake.Sticky[building] = true
+	if te.setupBase([]string{"setup", "--preinstall=none"}) != 1 || !strings.Contains(te.out(), "the new base VM is set up but did not stop") {
 		t.Errorf("running base: %s", te.out())
 	}
 	if _, err := os.Stat(te.state.Path(state.BaseVersion)); err == nil {
@@ -237,13 +237,13 @@ func TestSetupBase(t *testing.T) {
 	if base == nil || base.Status != vm.Stopped || base.CPUs != 2 || base.Memory != 5<<30 || base.Disk != 12<<30 || len(base.Mounts) != 0 {
 		t.Fatalf("base: %+v", base)
 	}
-	if !strings.HasPrefix(te.fake.CallLog(), "delete base\ncreate base template:debian-13\nstart base\nshell base bash -l\nstop base") {
+	if !strings.HasPrefix(te.fake.CallLog(), "delete base-building\ncreate base-building template:debian-13\nstart base-building\nshell base-building bash -l\nstop base-building\ndelete base\nclone base-building base\ndelete base-building") {
 		t.Errorf("calls:\n%s", te.fake.CallLog())
 	}
 	if len(stdin) != 1 {
 		t.Errorf("guest stdin: %q", stdin)
 	}
-	if te.state.Read(te.state.Path(state.BaseBuiltBy)) == "" || te.state.Read(te.state.Path(state.BaseVersion)) == "" {
+	if te.state.Read(state.BaseBuiltBy) == "" || te.state.Read(state.BaseVersion) == "" {
 		t.Error("markers not written")
 	}
 	if !strings.Contains(te.out(), "Base VM ready.") || strings.Contains(te.out(), "agent-vm claude") {
@@ -267,8 +267,9 @@ func TestSetupBase(t *testing.T) {
 	if len(got) != 2 || got[1] != "zsh -l: echo x\n" {
 		t.Errorf("setup.sh: %q", got)
 	}
-	if _, err := os.Stat(te.state.Path(state.BaseVersion)); err == nil {
-		t.Error("a failed setup left the ready marker")
+	// The base from before is untouched.
+	if _, err := os.Stat(te.state.Path(state.BaseVersion)); err != nil || te.fake.VMs[vmname.Template] == nil {
+		t.Error("a failed setup took the base from before")
 	}
 	// Lima's override.yaml: nothing made.
 	cfg := filepath.Join(LimaHome(te.state), "_config")

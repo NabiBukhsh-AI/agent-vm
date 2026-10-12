@@ -77,6 +77,12 @@ func MaxName(home string) int {
 // NewLima keeps its VMs in home (LIMA_HOME), and writes Lima's guest agent
 // and templates under stateDir.
 func NewLima(home, stateDir string) (*Lima, error) {
+	limaHomeMu.Lock()
+	defer limaHomeMu.Unlock()
+	// A value other than the one set earlier here is the user's.
+	if cur := os.Getenv("LIMA_HOME"); cur != limaHomeSet {
+		userLimaHome = cur
+	}
 	if err := os.Setenv("LIMA_HOME", home); err != nil {
 		return nil, err
 	}
@@ -84,16 +90,23 @@ func NewLima(home, stateDir string) (*Lima, error) {
 	return &Lima{stateDir: stateDir}, nil
 }
 
-// limaHomeSet is the LIMA_HOME NewLima set for Lima's packages.
-var limaHomeSet string
+var (
+	limaHomeMu sync.Mutex
+	// limaHomeSet is the LIMA_HOME NewLima set for Lima's packages.
+	limaHomeSet string
+	// userLimaHome is the LIMA_HOME the process started with.
+	userLimaHome string
+)
 
-// UserLimaHome is the user's own LIMA_HOME, "" when unset: what NewLima
-// set in this process is not theirs.
+// UserLimaHome is the user's own LIMA_HOME, "" when unset. It is only known
+// once NewLima has run, which replaces it for Lima's packages.
 func UserLimaHome() string {
-	if h := os.Getenv("LIMA_HOME"); h != limaHomeSet {
-		return h
+	limaHomeMu.Lock()
+	defer limaHomeMu.Unlock()
+	if limaHomeSet == "" {
+		return os.Getenv("LIMA_HOME")
 	}
-	return ""
+	return userLimaHome
 }
 
 // prepare writes the embedded share once, and points Lima's template store
@@ -254,7 +267,9 @@ func exprs(s Settings) ([]string, error) {
 	if s.noEphemeralPorts {
 		// guestIP 0.0.0.0, not required to be: an ignore rule on Lima's
 		// default 127.0.0.1 leaves the listeners on 0.0.0.0 forwarded.
-		e = append(e, fmt.Sprintf(`.portForwards = [{"guestIP": "0.0.0.0", "guestIPMustBeZero": false, "guestPortRange": [%d, %d], "proto": "any", "ignore": true}]`, ephemeralPorts[0], ephemeralPorts[1]))
+		// Last, after the VM's own rules, which win (Lima takes the first
+		// rule that matches); one made earlier is replaced, not repeated.
+		e = append(e, fmt.Sprintf(`.portForwards = ((.portForwards // []) | map(select(((.guestPortRange // []) | join("-")) != "%d-%d"))) + [{"guestIP": "0.0.0.0", "guestIPMustBeZero": false, "guestPortRange": [%d, %d], "proto": "any", "ignore": true}]`, ephemeralPorts[0], ephemeralPorts[1], ephemeralPorts[0], ephemeralPorts[1]))
 	}
 	if s.MountType != nil {
 		if *s.MountType == "" {
@@ -390,12 +405,26 @@ func (l *Lima) Edit(ctx context.Context, name string, s Settings) error {
 		return err
 	}
 	// Whole or not at all: a crash midway would leave a truncated lima.yaml.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, y, 0o644); err != nil {
-		os.Remove(tmp)
+	// A name of its own, so that two edits do not write the same file.
+	f, err := os.CreateTemp(inst.Dir, filenames.LimaYAML+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, err = f.Write(y)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, 0o644)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 // sharesKept fails unless Lima reads every share as written: it expands Go
@@ -458,6 +487,9 @@ func (l *Lima) Start(ctx context.Context, name string, log io.Writer) error {
 		return err
 	}
 	if err := Confined(fromLima(inst)); err != nil {
+		return err
+	}
+	if err := NetworkConfined(inst.Config); err != nil {
 		return err
 	}
 	return withLog(log, func() error {

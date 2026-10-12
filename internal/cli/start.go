@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -85,14 +86,18 @@ func (s *start) applyShares(writable bool) error {
 		return errStop
 	}
 	cache := s.state.Marker(state.FileMountsOf, s.name)
-	os.Remove(cache)
+	if err := os.Remove(cache); err != nil && !os.IsNotExist(err) {
+		s.warnf("Error: could not remove %s:\n%v", cache, err)
+		return errStop
+	}
 	if len(files) > 0 {
 		var lines []string
 		for _, f := range files {
 			lines = append(lines, f.Line())
 		}
-		if err := os.WriteFile(cache, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-			return err
+		if err := s.state.Write(state.FileMountsOf+s.name, []byte(strings.Join(lines, "\n")+"\n")); err != nil {
+			s.warnf("Error: could not record the single files of ~/.agent-vm/volumes for VM '%s':\n%v", s.name, err)
+			return errStop
 		}
 	}
 	return nil
@@ -140,8 +145,8 @@ func (s *start) resourcesDiffer(inst *vm.Instance) bool {
 	return false
 }
 
-// stopVM stops the VM to change it, then asks what its start did not, a
-// running VM having been asked nothing.
+// stopToChange stops the VM to change it, then asks what its start did not,
+// a running VM having been asked nothing.
 func (s *start) stopToChange() error {
 	if !s.stopVM(s.ctx, s.name) {
 		s.warnf("Error: could not stop VM '%s': nothing was changed.", s.name)
@@ -298,8 +303,22 @@ func allReadOnly(inst *vm.Instance) bool {
 
 // ensureRunning makes the project's VM exist and run, with its shares as
 // asked: cloned from the base, changed while stopped, the security checks
-// done first.
+// done first. Under the VM's lock: another run in the same folder waits for
+// this one to be done with the VM, and cleans up nothing of it meanwhile.
 func (s *start) ensureRunning() error {
+	// A scratch VM has a name of its own, which no other run uses.
+	if !s.opts.Scratch {
+		unlock, err := s.lockVM(s.ctx, s.name)
+		if err != nil {
+			s.warnf("Error: could not lock VM '%s': %v", s.name, err)
+			return errStop
+		}
+		defer unlock()
+	}
+	return s.ensureRunningLocked()
+}
+
+func (s *start) ensureRunningLocked() error {
 	o := &s.opts
 	if o.Scratch && (o.Reset || o.ReadOnly) {
 		s.warnf("Error: --scratch makes a new VM that shares nothing: --reset and --readonly do not go with it.")
@@ -317,6 +336,7 @@ func (s *start) ensureRunning() error {
 	if !s.limaOverridesOK() {
 		return errStop
 	}
+	warnDomains(s.state, s.io.Stderr)
 	// Two VMs set to one port: the second would fail to start.
 	if o.SSHPort > 0 {
 		if all, err := b.List(s.ctx); err == nil {
@@ -359,9 +379,13 @@ func (s *start) ensureRunning() error {
 		}
 	}
 	// A run interrupted while Lima made it leaves a folder without lima.yaml.
+	// Under the VM's lock: no other run is making it now.
 	if d := filepath.Join(LimaHome(s.state), s.name); isDirNoYAML(d) {
 		s.warnf("Detected partial VM state at %s (no lima.yaml): cleaning up.", d)
-		os.RemoveAll(d)
+		if err := os.RemoveAll(d); err != nil {
+			s.warnf("Error: could not remove %s:\n%v", d, err)
+			return errStop
+		}
 	}
 	base, err := s.get(vmname.Template)
 	if err != nil {
@@ -411,34 +435,41 @@ func (s *start) ensureRunning() error {
 	applyResize := false
 	if isNew {
 		fmt.Fprintf(s.io.Stdout, "Creating VM '%s'...\n", s.name)
-		if err := b.Clone(s.ctx, vmname.Template, s.name); err != nil {
+		marks, err := s.cloneBase()
+		if err != nil {
 			s.warnf("Error: could not clone the base template into '%s':\n%v", s.name, err)
 			if errors.Is(err, vm.ErrNameTooLong) {
 				s.warnf("  The VM's name comes from the project folder's: give the folder a shorter name.")
 			}
 			return errStop
 		}
+		s.created = true
 		for _, k := range []string{state.BuiltByOf, state.SSHFSOf} {
 			os.Remove(s.state.Marker(k, s.name))
 		}
-		builtBy, err := os.ReadFile(s.state.Path(state.BaseBuiltBy))
-		if err == nil {
-			os.WriteFile(s.state.Marker(state.BuiltByOf, s.name), builtBy, 0o644)
+		if marks.builtBy != nil {
+			if err := s.state.Write(state.BuiltByOf+s.name, marks.builtBy); err != nil {
+				s.warnf("Error: could not record which agent-vm built the base of VM '%s': %v", s.name, err)
+				s.dropNew()
+				return errStop
+			}
 		} else if s.protect {
 			// 0.1.0's bases have no sshfs for the protected shares.
 			s.warnf("Error: the base VM was built by agent-vm 0.1.0, without what the shares that keep .git read-only need. Run 'agent-vm setup' to build a new one.")
-			s.deleteVM(s.ctx, s.name)
+			s.dropNew()
 			return errStop
 		}
 		// Configured before its first start. A clone that could not be holds
 		// nothing yet: it goes, and the next run starts over.
 		if s.applyShares(wantWritable) != nil || s.applyResources() != nil {
-			s.deleteVM(s.ctx, s.name)
+			s.dropNew()
 			return errStop
 		}
 		fmt.Fprint(s.io.Stdout, s.notes)
-		if v, err := os.ReadFile(s.state.Path(state.BaseVersion)); err == nil {
-			os.WriteFile(s.state.Marker(state.VersionOf, s.name), v, 0o644)
+		if marks.version != nil {
+			if err := s.state.Write(state.VersionOf+s.name, marks.version); err != nil {
+				s.warnf("Warning: could not record the base VM '%s' was cloned from: %v. Every start will say that the base has been updated.", s.name, err)
+			}
 		}
 	} else if ((o.Disk > 0 || o.Memory > 0 || o.CPUs > 0) && s.resourcesDiffer(inst)) || (o.SSHPort >= 0 && o.SSHPort != inst.SSHPortConfig) {
 		// Only when the request differs: a caller passing its defaults every
@@ -525,12 +556,45 @@ func (s *start) ensureRunning() error {
 		}
 	}
 
-	if !wasRunning {
-		if err := s.boot(); err != nil {
-			return err
-		}
+	if wasRunning {
+		s.notePolicyChange()
+	} else if err := s.boot(); err != nil {
+		return err
 	}
 	return s.afterBoot(isNew, wasRunning, wantWritable)
+}
+
+// baseMarkers are the base's markers as they were when it was cloned: nil
+// for one that was not there.
+type baseMarkers struct{ builtBy, version []byte }
+
+// cloneBase clones the base template into the VM, under the base's lock: a
+// setup swapping the base in is not cloned from half way. The base's markers
+// are read under it too, so that they are those of the base cloned.
+func (s *start) cloneBase() (baseMarkers, error) {
+	var m baseMarkers
+	b, err := s.backend()
+	if err != nil {
+		return m, err
+	}
+	unlock, err := s.lockVM(s.ctx, vmname.Template)
+	if err != nil {
+		return m, err
+	}
+	defer unlock()
+	if err := b.Clone(s.ctx, vmname.Template, s.name); err != nil {
+		return m, err
+	}
+	m.builtBy, _ = os.ReadFile(s.state.Path(state.BaseBuiltBy))
+	m.version, _ = os.ReadFile(s.state.Path(state.BaseVersion))
+	return m, nil
+}
+
+// dropNew deletes the VM this run just made and could not set up.
+func (s *start) dropNew() {
+	if s.deleteVM(context.WithoutCancel(s.ctx), s.name) {
+		s.created = false
+	}
 }
 
 func isDirNoYAML(d string) bool {
@@ -560,6 +624,7 @@ func (s *start) boot() error {
 		host.WindowsStartHint(s.io.Stderr, ha)
 		return errStop
 	}
+	s.recordPolicy()
 	return nil
 }
 
@@ -575,8 +640,10 @@ func (s *start) afterBoot(isNew, wasRunning, wantWritable bool) error {
 			s.warnf("Error: could not make %s in VM '%s'.", s.dir, s.name)
 			return errStop
 		}
-		if b, err := os.ReadFile(s.state.Path("env")); err == nil {
-			payload = strings.TrimRight(env.StripCR(string(b)), "\n")
+		// Only the shared file: the project's stays out. Read as the other
+		// path does, a regular file only (a FIFO would block the start).
+		if b, ok := readRegular(s.state.Path("env")); ok {
+			payload = strings.TrimRight(env.StripCR(b), "\n")
 		}
 	} else {
 		pe := env.ProjectEnvFile(s.dir)
@@ -635,6 +702,7 @@ func (s *start) afterBoot(isNew, wasRunning, wantWritable bool) error {
 			s.warnf("Error: VM '%s' did not come back up after changing the project mount.", s.name)
 			return errStop
 		}
+		s.recordPolicy()
 		if probe = s.probe(payload, guestEnv, guestRuntime); probe.writable != want {
 			switch {
 			case probe.writable == "lost":
@@ -688,16 +756,27 @@ func (s *start) afterBoot(isNew, wasRunning, wantWritable bool) error {
 
 func isFile(p string) bool { fi, err := os.Stat(p); return err == nil && fi.Mode().IsRegular() }
 
+// readRegular is the content of p when it is a regular file once links are
+// followed. Another kind (a FIFO, a device) is not read: it could block.
+func readRegular(p string) (string, bool) {
+	if !isFile(p) {
+		return "", false
+	}
+	b, err := os.ReadFile(p)
+	return string(b), err == nil
+}
+
 // runHostScript runs a runtime script the host reads in the VM, piped in,
 // CRs dropped, under the shell it declares, from a login zsh: the VM's PATH
 // and ~/.agent-vm.env apply.
 func (s *start) runHostScript(path string) {
-	b, err := os.ReadFile(path)
-	if err != nil {
+	b, ok := readRegular(path)
+	if !ok {
+		s.warnf("Warning: could not read %s (not a regular file, or unreadable): not run.", path)
 		return
 	}
-	interp := runscript.Interpreter(string(b))
-	s.shellRun(strings.NewReader(env.StripCR(string(b))), paths.Guest(s.dir), "zsh", "-lc", "exec "+interp+" -s")
+	interp := runscript.Interpreter(b)
+	s.shellRun(strings.NewReader(env.StripCR(b)), paths.Guest(s.dir), "zsh", "-lc", "exec "+interp+" -s")
 }
 
 // shellRun runs args in the VM, its output on the command's, and returns
@@ -717,8 +796,7 @@ func (s *start) shellRun(stdin io.Reader, workdir string, args ...string) (int, 
 // does not know (xterm-ghostty, xterm-kitty), once per VM and $TERM.
 func (s *start) terminfo() {
 	t := os.Getenv("TERM")
-	marker := s.state.Marker(state.TermOf, s.name)
-	if t == "" || s.state.Read(marker) == t {
+	if t == "" || s.state.ReadMarker(state.TermOf, s.name) == t {
 		return
 	}
 	entry, err := exec.CommandContext(s.ctx, "infocmp", "-x", t).Output()
@@ -731,7 +809,9 @@ func (s *start) terminfo() {
 		s.warnf("Warning: failed to install '%s' terminfo inside VM.", t)
 		return
 	}
-	os.WriteFile(marker, []byte(t+"\n"), 0o644)
+	if err := s.state.Write(state.TermOf+s.name, []byte(t+"\n")); err != nil {
+		s.warnf("Warning: could not record that VM '%s' has the terminfo of '%s': %v", s.name, t, err)
+	}
 }
 
 // bindFiles binds the single files of ~/.agent-vm/volumes in place in the
@@ -765,7 +845,7 @@ func (s *start) bindFiles(isNew bool) {
 	}
 	fmt.Fprintln(s.io.Stdout, "Mounting individual files...")
 	// The paths as arguments, never in the script.
-	s.shellRun(nil, "", append([]string{"sudo", "bash", "-c", `
+	code, err := s.shellRun(nil, "", append([]string{"sudo", "bash", "-c", `
         set -e
         for entry in "$@"; do
           bind_src="${entry%%|*}"
@@ -777,6 +857,11 @@ func (s *start) bindFiles(isNew bool) {
           fi
         done
       `, "--"}, entries...)...)
+	if err != nil {
+		s.warnf("Warning: could not bind the single files of ~/.agent-vm/volumes in VM '%s': %v", s.name, err)
+	} else if code != 0 {
+		s.warnf("Warning: binding the single files of ~/.agent-vm/volumes in VM '%s' failed (status %d).", s.name, code)
+	}
 }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }

@@ -37,7 +37,7 @@ export const en = {
     title: 'Give agents a machine they can wreck.',
     titleAccent: 'Keep yours.',
     lede:
-      'agent-vm runs AI coding agents with every permission, in a Linux VM per project. Your SSH keys, your browser sessions, the rest of your disk and your local network are out of their reach.',
+      'agent-vm runs AI coding agents with full permissions in a Linux VM, per project. Your SSH keys, your browser sessions, the rest of your disk and your local network are out of their reach.',
     installLabel: 'Get started',
     ctaPrimary: 'Install it',
     ctaSecondary: 'How it works',
@@ -94,7 +94,7 @@ export const en = {
       'agent-vm is one binary, with Lima built in and no daemon: each running VM is served by an agent-vm process of its own.',
     prerequisitesTitle: 'Prerequisites',
     prerequisites: [
-      { name: 'macOS, Linux or Windows', note: 'Windows is experimental: not yet tried on a Windows machine.', href: '' },
+      { name: 'macOS, Linux or Windows', note: 'Windows is experimental.', href: '' },
       {
         name: 'QEMU, on Linux and Windows',
         note: 'macOS needs nothing more. On Linux, KVM too: `agent-vm setup` says what is missing and how to install it. On Windows, QEMU 7.2 or later and the Windows Hypervisor Platform feature.',
@@ -132,7 +132,7 @@ export const en = {
         id: 'windows',
         label: 'Windows',
         code: '# in Git Bash (experimental)\nwinget install SoftwareFreedom.QEMU\ncurl -fsSL https://www.agent-vm.org/install.sh | sh',
-        note: 'Experimental: not yet tried on a Windows machine. Without Git Bash, download `agent-vm-X.Y.Z-windows-amd64.tar.gz` (or `-arm64`) from the GitHub releases, unpack it with `tar -xzf`, and run `agent-vm.exe install` in PowerShell. VMs also need the Windows Hypervisor Platform feature, which an administrator turns on once: see [Windows and WSL](#windows-and-wsl).',
+        note: 'Experimental. Without Git Bash, download `agent-vm-X.Y.Z-windows-amd64.tar.gz` (or `-arm64`) from the GitHub releases, unpack it with `tar -xzf`, and run `agent-vm.exe install` in PowerShell. VMs also need the Windows Hypervisor Platform feature, which an administrator turns on once: see [Windows and WSL](#windows-and-wsl).',
       },
     ],
     steps: [
@@ -159,7 +159,7 @@ export const en = {
       {
         title: 'Run an agent',
         body: 'Extra arguments are forwarded to the agent as-is, so anything its own CLI accepts works here.',
-        code: 'agent-vm opencode                        # OpenCode\nagent-vm claude                          # Claude Code\nagent-vm codex                           # Codex CLI\nagent-vm vibe                            # Mistral Vibe\n\nagent-vm claude -p "fix all lint errors"\nagent-vm opencode run "update the changelog"',
+        code: 'agent-vm opencode                        # OpenCode\nagent-vm claude                          # Claude Code\nagent-vm codex                           # Codex CLI\nagent-vm vibe                            # Mistral Vibe\nagent-vm pi                              # Pi\n\nagent-vm claude -p "fix all lint errors"\nagent-vm opencode run "update the changelog"',
       },
       {
         title: 'Reach the dev server',
@@ -204,9 +204,6 @@ export const en = {
       '# ~/.agent-vm/env\nGIT_AUTHOR_NAME=Your Name\nGIT_AUTHOR_EMAIL=12345+you@users.noreply.github.com\nGIT_COMMITTER_NAME=Your Name\nGIT_COMMITTER_EMAIL=12345+you@users.noreply.github.com',
     gitNote:
       'These variables win over `git config`, in every repository of the VM: for per-repository identities, set `user.name` and `user.email` from a runtime script instead. `gh` picks up `GH_TOKEN` on its own, so `gh pr create` works with nothing else. Plain `git push` over HTTPS needs a credential helper: one `gh auth setup-git` line in your [runtime script](#customisation-files).',
-    gitHumanTitle: 'That said, keep the commits human',
-    gitHumanBody:
-      'Being able to commit is not a reason to let it. A commit says you read the diff, so let the agent write the code, read it, and commit it yourself. With `.git` [protected](#git), that is the only way.',
   },
 
   reference: {
@@ -365,7 +362,7 @@ export const en = {
           {
             title: 'Windows and WSL',
             paras: [
-              'On Windows, agent-vm runs natively, from PowerShell or Git Bash, with QEMU; it is experimental, not yet tried on a Windows machine. Your folders are `C:/Users/you/project` to it, and `/c/Users/you/project` in the VM, as with 0.2. The volumes file takes `C:/x` or `C:\\x`, and 0.2’s `/c/x`.',
+              'On Windows, agent-vm runs natively, from PowerShell or Git Bash, with QEMU; it is experimental. Your folders are `C:/Users/you/project` to it, and `/c/Users/you/project` in the VM, as with 0.2. The volumes file takes `C:/x` or `C:\\x`, and 0.2’s `/c/x`.',
               'VMs need the Windows Hypervisor Platform feature. It is off by default and only an administrator can turn it on, once, in Windows Features or with the command below, then a reboot. On a managed laptop, that is a request to IT. A start that fails for want of it says so.',
               'WSL2 is Linux to agent-vm, and its VMs need KVM, which WSL2 has only with nested virtualization from the Windows host. WSL1 cannot run VMs.',
             ],
@@ -525,18 +522,10 @@ export const en = {
             title: 'Guarded files',
             paras: [
               'For the first kind, agent-vm guards the files your machine runs on its own: when the VM writes, creates, renames or removes one, at any depth in the shares, a dialog asks you first. A yes holds until the VM stops; a no, for a minute, after which a retry asks again. Where no dialog can be shown (no desktop session), the write is refused and a notification says so; a dialog left unanswered for two minutes refuses it too. `AGENT_VM_GUARDED_WRITES=deny` refuses them all without asking.',
-              'Guarded by default: `.envrc` (direnv), `.vscode/tasks.json`, `.vscode/settings.json` and `.vscode/launch.json` (VS Code), `.pre-commit-config.yaml` (pre-commit), `lefthook.yml` and `.lefthook.yml` (lefthook), `mise.toml` and `.mise.toml` (mise). Files the agent edits as a matter of course, such as a `Makefile` or `package.json`, are not: add them in `~/.agent-vm/guarded`, one path per line, read when a VM starts. `!path` removes a default.',
+              'Guarded by default: `.envrc` (direnv), `.vscode/tasks.json`, `.vscode/settings.json` and `.vscode/launch.json` (VS Code), `.pre-commit-config.yaml` (pre-commit), `lefthook.yml` and `.lefthook.yml` (lefthook), `mise.toml` and `.mise.toml` (mise). Files the agent edits as a matter of course, such as a `Makefile` or `package.json`, are not: add them in `~/.agent-vm/guarded`, one path per line, read when a VM starts. `!path` removes a default, and `*.ext` guards an extension. On a Windows host, `*.library-ms`, `*.searchConnector-ms`, `*.lnk`, `*.url`, `*.scf` and `desktop.ini` are guarded too: Explorer sends your NTLM hash to the server they name when it shows them. There is no dialog on Windows, so the VM’s writes to them are refused.',
             ],
             list: [],
             code: '# ~/.agent-vm/guarded\nMakefile               # ask before the VM changes any Makefile\n.github/workflows/ci.yml\n!.vscode/settings.json # no longer asked',
-          },
-          {
-            title: 'Keeping your checkout out of reach',
-            paras: [
-              'Do not give agent-vm the checkout you work in. Clone the project a second time, run agent-vm there, and `git fetch` its work into your checkout once you have read the diff. Fetching does not check files out, so the agent’s files reach your working tree only when you merge. This relies on the clone’s `.git` being read-only for the VM, as it is unless you pass `--unsafe-writable-git`: otherwise the VM can write it, and git then reads it.',
-            ],
-            list: [],
-            code: '# once; --no-local copies objects, no hardlinks\ngit clone --no-local ~/work/app ~/agent/app\n# the agent works there\ncd ~/agent/app && agent-vm claude\n# back in your checkout, when it is done\ncd ~/work/app\ngit fetch ~/agent/app HEAD:agent/review\ngit diff ...agent/review   # read all of it\ngit merge agent/review',
           },
           {
             title: 'Editors and agents',
@@ -577,7 +566,7 @@ export const en = {
             paras: [],
             list: [
               'macOS: files written through the share carry no quarantine flag, so Gatekeeper does not check an `.app`, `.command` or `.pkg` left there. Do not open them from Finder.',
-              'Windows: Explorer contacts the server named in a `.library-ms`, `.url`, `.lnk` or `desktop.ini` it displays, sending your NTLM hash ([CVE-2025-24054](https://research.checkpoint.com/2025/cve-2025-24054-ntlm-exploit-in-the-wild/)). Keep Windows updated and outbound SMB blocked.',
+              'Windows: Explorer can contact the server named in a `.library-ms`, `.searchConnector-ms`, `.lnk`, `.url`, `.scf` or `desktop.ini` it displays, and send your NTLM hash ([CVE-2025-24054](https://research.checkpoint.com/2025/cve-2025-24054-ntlm-exploit-in-the-wild/) for `.library-ms`, [CVE-2025-50154](https://nvd.nist.gov/vuln/detail/CVE-2025-50154) and [CVE-2025-59214](https://nvd.nist.gov/vuln/detail/CVE-2025-59214) for `.lnk`). Patches have been bypassed before. agent-vm refuses the VM’s writes to these files on Windows; keep Windows updated, outbound SMB (TCP 445) blocked and, where you can, [NTLM blocked on the SMB client](https://learn.microsoft.com/en-us/powershell/module/smbshare/set-smbclientconfiguration).',
               'Linux: KDE’s Dolphin ran commands from a `.desktop` file in a folder it only displayed (CVE-2019-14744, fixed in KDE Frameworks 5.61).',
             ],
             code: '',
@@ -718,32 +707,6 @@ export const en = {
     ],
     dockerNote:
       'Docker runs natively inside the VM with no Docker-in-Docker, and headless Chromium works out of the box. On a Mac, this replaces Docker Desktop.',
-  },
-
-  roadmap: {
-    title: 'Known gaps.',
-    items: [
-      {
-        status: 'Built, not yet tried',
-        title: 'Windows, natively',
-        body: 'agent-vm runs on Windows without Git Bash now, its paths handled as `C:/...` and seen by the VM as `/c/...`, as in 0.2, and its tests run on any OS. Nothing of it has run on a Windows machine yet: setup, the shares, the network isolation, the port check. Wanted: someone to try it, on x86_64 or arm64, and a dialog for the guarded files there.',
-      },
-      {
-        status: 'Idea',
-        title: 'Review the agent’s writes',
-        body: 'Every write of the VM goes through agent-vm’s SFTP server. It could keep them aside and let you review the diff, and apply all or part of it to the real folder. A first step: the list of every path the VM wrote during a session.',
-      },
-      {
-        status: 'Needs an M3',
-        title: 'Run a VM inside the VM',
-        body: 'A `--allow-nested-vm` flag, for testing VM tooling from in there. Lima supports nested virtualization, but it is off by default and cannot be turned on unconditionally: below an Apple M3, Lima fails to start the VM instead of degrading, so every VM would stop starting. The flag would have to detect host support first. Nothing here has an M3 to test it on. It would also hand the agent a hypervisor interface.',
-      },
-      {
-        status: 'Designed, not built',
-        title: 'Run the VMs on another machine',
-        body: 'One install on your laptop driving VMs on a box you rent. Close the laptop, the agent keeps working. Open questions: addressing a VM by name rather than by working directory, and who owns deleting a workspace.',
-      },
-    ],
   },
 
   contribute: {

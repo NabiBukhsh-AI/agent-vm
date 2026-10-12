@@ -15,6 +15,10 @@ import (
 
 var errDenied error = windows.ERROR_ACCESS_DENIED
 
+// lexicalGuard is false: a short name (VSCODE~1) hides the entry from the request path, so Guard
+// is asked with normalized names, by guardAt and guardHandle.
+const lexicalGuard = false
+
 // openNonblock: opening a file never blocks on Windows.
 const openNonblock = 0
 
@@ -143,20 +147,56 @@ func normalizedName(h windows.Handle) (string, error) {
 	}
 }
 
-// checkHandle denies fh when its normalized path has a read-only component, or is not under the root.
-func (h *rootedHandlers) checkHandle(fh windows.Handle) error {
+// normalizedRel is the path of fh relative to the root, slash-separated, with the file system's own spelling.
+func (h *rootedHandlers) normalizedRel(fh windows.Handle) (string, error) {
 	name, err := normalizedName(fh)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if name == h.rootName {
-		return nil
+		return ".", nil
 	}
 	rel, ok := strings.CutPrefix(name, h.rootName+`\`)
 	if !ok {
-		return errDenied
+		return "", errDenied
 	}
-	for _, c := range strings.Split(rel, `\`) {
+	return strings.ReplaceAll(rel, `\`, "/"), nil
+}
+
+// guardAt asks Guard about base in the directory parent, by the normalized name of parent.
+func (h *rootedHandlers) guardAt(parent windows.Handle, base string, entry bool) error {
+	if Guard == nil {
+		return nil
+	}
+	dir, err := h.normalizedRel(parent)
+	if err != nil {
+		return err
+	}
+	return h.guard(path.Join(dir, base), entry)
+}
+
+// guardHandle asks Guard about the file of fh, by its normalized name.
+func (h *rootedHandlers) guardHandle(fh windows.Handle, entry bool) error {
+	if Guard == nil {
+		return nil
+	}
+	rel, err := h.normalizedRel(fh)
+	if err != nil {
+		return err
+	}
+	return h.guard(rel, entry)
+}
+
+// checkHandle denies fh when its normalized path has a read-only component, or is not under the root.
+func (h *rootedHandlers) checkHandle(fh windows.Handle) error {
+	rel, err := h.normalizedRel(fh)
+	if err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	for _, c := range strings.Split(rel, "/") {
 		c, _, _ = strings.Cut(c, ":")
 		if h.isReadonlyName(c) {
 			return errDenied
@@ -231,13 +271,17 @@ func (h *rootedHandlers) openParent(rel string) (windows.Handle, string, error) 
 
 // openChecked opens the writable path p, which must not be a reparse point unless options has FILE_OPEN_REPARSE_POINT.
 // The caller must close both handles.
-func (h *rootedHandlers) openChecked(p string, access, options uint32) (parent, fh windows.Handle, err error) {
-	rel, err := h.writableRel(p)
+func (h *rootedHandlers) openChecked(p string, access, options uint32, entry bool) (parent, fh windows.Handle, err error) {
+	rel, err := h.writableRel(p, entry)
 	if err != nil {
 		return windows.InvalidHandle, windows.InvalidHandle, err
 	}
 	parent, base, err := h.openParent(rel)
 	if err != nil {
+		return windows.InvalidHandle, windows.InvalidHandle, err
+	}
+	if err := h.guardAt(parent, base, entry); err != nil {
+		windows.CloseHandle(parent)
 		return windows.InvalidHandle, windows.InvalidHandle, err
 	}
 	var objFlags uint32
@@ -247,6 +291,9 @@ func (h *rootedHandlers) openChecked(p string, access, options uint32) (parent, 
 	fh, err = ntCreate(parent, base, access, 0, windows.FILE_OPEN, options, objFlags)
 	if err == nil {
 		err = h.checkHandle(fh)
+		if err == nil {
+			err = h.guardHandle(fh, entry)
+		}
 		if err != nil {
 			windows.CloseHandle(fh)
 		}
@@ -259,7 +306,7 @@ func (h *rootedHandlers) openChecked(p string, access, options uint32) (parent, 
 }
 
 func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
-	rel, err := h.writableRel(r.Filepath)
+	rel, err := h.writableRel(r.Filepath, false)
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +315,9 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
 		return nil, err
 	}
 	defer windows.CloseHandle(parent)
+	if err := h.guardAt(parent, base, false); err != nil {
+		return nil, err
+	}
 	pf := r.Pflags()
 	var access, options uint32
 	switch {
@@ -298,7 +348,11 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
 		return nil, &os.PathError{Op: "open", Path: r.Filepath, Err: err}
 	}
 	// Checked before truncating: base may be the short name of an existing read-only name.
-	if err := h.checkHandle(fh); err != nil {
+	err = h.checkHandle(fh)
+	if err == nil {
+		err = h.guardHandle(fh, false)
+	}
+	if err != nil {
 		windows.CloseHandle(fh)
 		return nil, err
 	}
@@ -316,7 +370,7 @@ func (h *rootedHandlers) remove(r *sftp.Request) error {
 	if r.Method == "Rmdir" {
 		options |= windows.FILE_DIRECTORY_FILE
 	}
-	parent, fh, err := h.openChecked(r.Filepath, windows.DELETE|windows.FILE_READ_ATTRIBUTES, options)
+	parent, fh, err := h.openChecked(r.Filepath, windows.DELETE|windows.FILE_READ_ATTRIBUTES, options, true)
 	if err != nil {
 		return err
 	}
@@ -356,7 +410,7 @@ func deleteHandle(fh windows.Handle) error {
 }
 
 func (h *rootedHandlers) mkdir(r *sftp.Request) error {
-	rel, err := h.writableRel(r.Filepath)
+	rel, err := h.writableRel(r.Filepath, true)
 	if err != nil {
 		return err
 	}
@@ -365,6 +419,9 @@ func (h *rootedHandlers) mkdir(r *sftp.Request) error {
 		return err
 	}
 	defer windows.CloseHandle(parent)
+	if err := h.guardAt(parent, base, true); err != nil {
+		return err
+	}
 	// A base that is the short name of an existing entry fails with STATUS_OBJECT_NAME_COLLISION.
 	fh, err := ntCreate(parent, base, fileDirectoryAccess, fileAttributeNormal, windows.FILE_CREATE,
 		windows.FILE_DIRECTORY_FILE, windows.OBJ_DONT_REPARSE)
@@ -410,11 +467,11 @@ func (h *rootedHandlers) rename(r *sftp.Request, noReplace bool) error {
 func (h *rootedHandlers) twoPaths(oldPath, newPath string, access, options uint32, noReplace bool,
 	f func(src, newParent windows.Handle, newBase string) error,
 ) error {
-	newRel, err := h.writableRel(newPath)
+	newRel, err := h.writableRel(newPath, true)
 	if err != nil {
 		return err
 	}
-	oldParent, src, err := h.openChecked(oldPath, access, options|windows.FILE_OPEN_REPARSE_POINT)
+	oldParent, src, err := h.openChecked(oldPath, access, options|windows.FILE_OPEN_REPARSE_POINT, true)
 	if err != nil {
 		return err
 	}
@@ -425,11 +482,17 @@ func (h *rootedHandlers) twoPaths(oldPath, newPath string, access, options uint3
 		return err
 	}
 	defer windows.CloseHandle(newParent)
+	if err := h.guardAt(newParent, newBase, true); err != nil {
+		return err
+	}
 	// newBase may be the short name of an existing read-only name, which would be replaced.
 	dst, err := ntCreate(newParent, newBase, windows.FILE_READ_ATTRIBUTES, 0, windows.FILE_OPEN, windows.FILE_OPEN_REPARSE_POINT, 0)
 	switch {
 	case err == nil:
 		err = h.checkHandle(dst)
+		if err == nil {
+			err = h.guardHandle(dst, true)
+		}
 		windows.CloseHandle(dst)
 		if err != nil {
 			return err
@@ -488,7 +551,7 @@ func (h *rootedHandlers) setstat(r *sftp.Request) error {
 	if flags.Size {
 		access |= windows.FILE_WRITE_DATA
 	}
-	parent, fh, err := h.openChecked(r.Filepath, access, 0)
+	parent, fh, err := h.openChecked(r.Filepath, access, 0, false)
 	if err != nil {
 		return err
 	}

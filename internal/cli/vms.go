@@ -17,22 +17,22 @@ import (
 // target is the VM `stop` and `rm` act on: the current directory's, or one
 // named as `list` prints it. Agent-vm's Lima home holds its VMs alone (see
 // newApp), so any name there is one of them. A VM no folder names any more
-// (renamed, deleted) is reached by its name.
-func (e *app) target(ctx context.Context, verb string, args []string) (string, bool) {
-	var name string
+// (renamed, deleted) is reached by its name. The status is 0 when the VM is
+// found, else the exit status of the command.
+func (e *app) target(ctx context.Context, verb string, args []string) (name string, status int) {
 	switch len(args) {
 	case 0:
 		wd, err := vmname.AbsDir("")
 		if err != nil {
 			fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
-			return "", false
+			return "", 1
 		}
 		name = vmname.Name(wd)
 	case 1:
 		name = args[0]
 	default:
 		fmt.Fprintf(e.io.Stderr, "Usage: agent-vm %s [vm-name]\n", verb)
-		return "", false
+		return "", exitUsage
 	}
 	b, err := e.backend()
 	if err == nil {
@@ -40,7 +40,7 @@ func (e *app) target(ctx context.Context, verb string, args []string) (string, b
 	}
 	switch {
 	case err == nil:
-		return name, true
+		return name, 0
 	case errors.Is(err, vm.ErrNotFound) && len(args) == 0:
 		fmt.Fprintln(e.io.Stderr, "No VM found for this directory.")
 		fmt.Fprintf(e.io.Stderr, "Run 'agent-vm list' to see existing VMs, then 'agent-vm %s <vm-name>'.\n", verb)
@@ -50,13 +50,13 @@ func (e *app) target(ctx context.Context, verb string, args []string) (string, b
 	default:
 		fmt.Fprintf(e.io.Stderr, "Error: could not query Lima: %v\n", err)
 	}
-	return "", false
+	return "", 1
 }
 
 func (e *app) stopCmd(ctx context.Context, args []string) int {
-	name, ok := e.target(ctx, "stop", args)
-	if !ok {
-		return 1
+	name, status := e.target(ctx, "stop", args)
+	if status != 0 {
+		return status
 	}
 	fmt.Fprintf(e.io.Stdout, "Stopping VM '%s'...\n", name)
 	if !e.stopVM(ctx, name) {
@@ -79,16 +79,24 @@ func (e *app) stopVM(ctx context.Context, name string) bool {
 }
 
 func (e *app) rmCmd(ctx context.Context, args []string) int {
-	name, ok := e.target(ctx, "rm", args)
-	if !ok {
+	name, status := e.target(ctx, "rm", args)
+	if status != 0 {
+		return status
+	}
+	if !e.removeVM(ctx, name) {
 		return 1
 	}
+	return 0
+}
+
+// removeVM stops and deletes name, saying so, and reports whether it is gone.
+func (e *app) removeVM(ctx context.Context, name string) bool {
 	fmt.Fprintf(e.io.Stdout, "Stopping and deleting VM '%s'...\n", name)
 	if !e.deleteVM(ctx, name) {
-		return 1
+		return false
 	}
 	fmt.Fprintln(e.io.Stdout, "VM destroyed.")
-	return 0
+	return true
 }
 
 // deleteVM stops and deletes name, then forgets what agent-vm knew of it.
@@ -112,7 +120,11 @@ func (e *app) deleteVM(ctx context.Context, name string) bool {
 
 // `destroy-all`: every agent-vm VM, the base template included: the command
 // that gives the disk space back. `agent-vm setup` rebuilds the template.
-func (e *app) destroyAllCmd(ctx context.Context, _ []string) int {
+func (e *app) destroyAllCmd(ctx context.Context, args []string) int {
+	if len(args) > 0 {
+		fmt.Fprintln(e.io.Stderr, "Usage: agent-vm destroy-all")
+		return exitUsage
+	}
 	vms, err := e.agentVMs(ctx)
 	if err != nil {
 		fmt.Fprintf(e.io.Stderr, "Error: could not query Lima: %v\n", err)
@@ -131,7 +143,11 @@ func (e *app) destroyAllCmd(ctx context.Context, _ []string) int {
 	if base {
 		fmt.Fprintf(e.io.Stdout, "(%s is the base template: 'agent-vm setup' rebuilds it.)\n", vmname.Template)
 	}
-	if !e.ui.CanAsk() || !e.ui.AskYN("Continue?", false) {
+	if !e.ui.CanAsk() {
+		fmt.Fprintln(e.io.Stderr, "Error: destroy-all asks before it deletes, and there is no terminal to ask on. Nothing was destroyed.")
+		return 1
+	}
+	if !e.ui.AskYN("Continue?", false) {
 		fmt.Fprintln(e.io.Stdout, "Aborted.")
 		return 0
 	}
@@ -149,6 +165,8 @@ func (e *app) destroyAllCmd(ctx context.Context, _ []string) int {
 	return 0
 }
 
+// agentVMs lists the VMs, after moving 0.2's: for the commands that change
+// them.
 func (e *app) agentVMs(ctx context.Context) ([]*vm.Instance, error) {
 	b, err := e.backend()
 	if err != nil {
@@ -157,18 +175,34 @@ func (e *app) agentVMs(ctx context.Context) ([]*vm.Instance, error) {
 	return b.List(ctx)
 }
 
+// lookVMs lists the VMs without moving 0.2's: for the commands that only look.
+func (e *app) lookVMs(ctx context.Context) ([]*vm.Instance, error) {
+	b, err := e.readOnlyBackend()
+	if err != nil {
+		return nil, err
+	}
+	return b.List(ctx)
+}
+
 // `list`, `status`: the agent-vm VMs as Lima's table shows them, the
 // current directory's marked with >, and the base each was cloned from in a
-// last column.
-func (e *app) listCmd(ctx context.Context, _ []string) int {
+// last column. Read-only: 0.2's VMs are said to wait, not moved.
+func (e *app) listCmd(ctx context.Context, args []string) int {
+	if len(args) > 0 {
+		fmt.Fprintln(e.io.Stderr, "Usage: agent-vm list")
+		return exitUsage
+	}
 	current := ""
 	if wd, err := vmname.AbsDir(""); err == nil {
 		current = vmname.Name(wd)
 	}
-	vms, err := e.agentVMs(ctx)
+	vms, err := e.lookVMs(ctx)
 	if err != nil {
 		fmt.Fprintf(e.io.Stderr, "Error: could not query Lima: %v\n", err)
 		return 1
+	}
+	if old, from := e.unmovedOld(); len(old) > 0 {
+		fmt.Fprintf(e.io.Stderr, "%d VM(s) of agent-vm 0.2 in %s are not listed: the next command that starts a VM offers to move them.\n", len(old), from)
 	}
 	if len(vms) == 0 {
 		fmt.Fprintln(e.io.Stdout, "  (no VMs)")
@@ -198,8 +232,8 @@ func table(vms []*vm.Instance) string {
 	home := paths.Home()
 	for _, v := range vms {
 		dir := paths.Host(v.Dir)
-		if home != "" && strings.HasPrefix(dir, home) {
-			dir = "~" + strings.TrimPrefix(dir, home)
+		if rel, ok := paths.In(dir, home); ok {
+			dir = strings.TrimSuffix("~/"+rel, "/.")
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s:%d\t%s\t%s\t%d\t%s\t%s\t%s\n", v.Name, v.Status, v.SSHAddress, v.SSHLocalPort,
 			v.VMType, v.Arch, v.CPUs, units.BytesSize(float64(v.Memory)), units.BytesSize(float64(v.Disk)), dir)

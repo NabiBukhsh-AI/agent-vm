@@ -69,6 +69,15 @@ type Configuration struct {
 	// destination once NAT applied. A refused TCP connection is reset, a
 	// refused UDP datagram dropped.
 	Outbound Outbound `yaml:"-"`
+
+	// DNSNames, when set, decides which names the gateway's resolver looks
+	// up: any other (the name without its final dot) gets NXDOMAIN, and is
+	// never asked of the host's resolver. This covers every query the
+	// gateway receives, over UDP or TCP.
+	DNSNames func(name string) bool `yaml:"-"`
+	// DNSAnswered, when set, is told of the IPv4 addresses given for name,
+	// so that Outbound can let the guest reach those only.
+	DNSAnswered func(name string, ips []net.IP) `yaml:"-"`
 }
 
 type Protocol string

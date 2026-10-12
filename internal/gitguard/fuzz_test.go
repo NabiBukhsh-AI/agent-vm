@@ -98,13 +98,14 @@ func TestHooksName(t *testing.T) {
 }
 
 func FuzzVisible(f *testing.F) {
-	for _, s := range []string{"core.editor = vi", "a\x1b[2Jb", "\u009b31m", "x\ny", "\xff\x9b"} {
+	for _, s := range []string{"core.editor = vi", "a\x1b[2Jb", "\u009b31m", "x\ny", "\xff\x9b", "a\xe2\x80\xaeb", "x\xe2\x80\x8by", "\xe2\x81\xa6z", "\xf3\xa0\x81\x81"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
 		for _, r := range visible(s) {
-			if unicode.IsControl(r) {
-				t.Fatalf("control character %U left in %q", r, visible(s))
+			// Control, format (bidi overrides, zero-width), separators...
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Z, r) && r != ' ' || unicode.Is(unicode.Co, r) {
+				t.Fatalf("%U left in %q", r, visible(s))
 			}
 		}
 	})

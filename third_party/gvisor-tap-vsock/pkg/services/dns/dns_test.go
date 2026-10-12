@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -394,4 +395,90 @@ func startDNSServer(upstream upstreamResolver) (string, func(), error) {
 		udpConn.Close()
 		tcpLn.Close()
 	}, nil
+}
+
+type countingResolver struct {
+	upstreamResolver
+	mu    sync.Mutex
+	asked []string
+}
+
+func (c *countingResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	c.mu.Lock()
+	c.asked = append(c.asked, host)
+	c.mu.Unlock()
+	return c.upstreamResolver.LookupIPAddr(ctx, host)
+}
+
+func TestPolicy(t *testing.T) {
+	upstream := &countingResolver{upstreamResolver: &mockdns.Resolver{
+		Zones: map[string]mockdns.Zone{
+			"ok.test.": {A: []string{"192.0.2.1"}},
+			"no.test.": {A: []string{"192.0.2.2"}},
+		},
+	}}
+	udpConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer udpConn.Close()
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer tcpLn.Close()
+	server, err := NewWithUpstreamResolver(udpConn, tcpLn, nil, upstream)
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	told := map[string][]net.IP{}
+	server.SetPolicy(
+		func(name string) bool { return name == "ok.test" },
+		func(name string, ips []net.IP) {
+			mu.Lock()
+			defer mu.Unlock()
+			told[name] = ips
+		})
+	go func() { _ = server.Serve() }()
+	go func() { _ = server.ServeTCP() }()
+	time.Sleep(100 * time.Millisecond)
+
+	for _, proto := range []string{"udp", "tcp"} {
+		c := &dns.Client{Net: proto}
+		addr := udpConn.LocalAddr().String()
+		if proto == "tcp" {
+			addr = tcpLn.Addr().String()
+		}
+
+		q := new(dns.Msg)
+		q.SetQuestion("NO.test.", dns.TypeA)
+		r, _, err := c.Exchange(q, addr)
+		require.NoError(t, err, proto)
+		require.Equal(t, dns.RcodeNameError, r.Rcode, proto)
+		require.Empty(t, r.Answer, proto)
+
+		q = new(dns.Msg)
+		q.SetQuestion("ok.test.", dns.TypeA)
+		r, _, err = c.Exchange(q, addr)
+		require.NoError(t, err, proto)
+		require.Equal(t, dns.RcodeSuccess, r.Rcode, proto)
+		require.Len(t, r.Answer, 1, proto)
+
+	}
+
+	// One refused question refuses the message.
+	m := new(dns.Msg)
+	m.Question = []dns.Question{
+		{Name: "ok.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
+		{Name: "no.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
+	}
+	server.handler.addAnswers(m)
+	require.Equal(t, dns.RcodeNameError, m.Rcode)
+	require.Empty(t, m.Answer)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []net.IP{net.ParseIP("192.0.2.1").To4()}, told["ok.test"])
+	require.NotContains(t, told, "no.test")
+	upstream.mu.Lock()
+	defer upstream.mu.Unlock()
+	for _, host := range upstream.asked {
+		require.Equal(t, "ok.test.", host, "a refused name was looked up")
+	}
 }

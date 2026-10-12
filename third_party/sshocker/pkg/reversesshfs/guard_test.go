@@ -15,7 +15,7 @@ import (
 func TestRootedGuard(t *testing.T) {
 	var asked []string
 	allow := false
-	Guard = func(root, rel string) bool {
+	Guard = func(root, rel string, entry bool) bool {
 		asked = append(asked, rel)
 		return allow || rel != ".envrc" && rel != "src/new"
 	}

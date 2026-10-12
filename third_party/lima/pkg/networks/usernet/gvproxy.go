@@ -49,18 +49,31 @@ const gatewayMacAddr = "5a:94:ef:e4:0c:dd"
 // The host services the guest needs (AllowHostService) are reached past it.
 var Outbound types.Outbound
 
-// hostServices are the ports of the host's loopback the guest may always reach.
+// Names and Answered, when set by the program running the hostagent, are
+// applied by the gateway's DNS server of the per-instance netstacks to every
+// query it gets (types.Configuration.DNSNames and DNSAnswered).
+var (
+	Names    func(name string) bool
+	Answered func(name string, ips []net.IP)
+)
+
+type hostService struct {
+	network string
+	port    uint16
+}
+
+// hostServices are the ports of 127.0.0.1 the guest may always reach.
 var hostServices sync.Map
 
-// AllowHostService lets the guest reach port on the host's loopback, past
-// Outbound: the hostagent's DNS server.
-func AllowHostService(port int) {
-	hostServices.Store(uint16(port), true)
+// AllowHostService lets the guest reach port of 127.0.0.1 over network ("tcp"
+// or "udp") past Outbound: the hostagent's DNS server.
+func AllowHostService(network string, port int) {
+	hostServices.Store(hostService{network, uint16(port)}, true)
 }
 
 func outbound(network string, dst netip.AddrPort) bool {
-	if dst.Addr().Unmap().IsLoopback() {
-		if _, ok := hostServices.Load(dst.Port()); ok {
+	if dst.Addr().Unmap() == netip.AddrFrom4([4]byte{127, 0, 0, 1}) {
+		if _, ok := hostServices.Load(hostService{network, dst.Port()}); ok {
 			return true
 		}
 	}
@@ -107,6 +120,8 @@ func StartGVisorNetstack(ctx context.Context, gVisorOpts *GVisorNetstackOpts) er
 		},
 		GatewayVirtualIPs: []string{gatewayIP},
 		Outbound:          outbound,
+		DNSNames:          Names,
+		DNSAnswered:       Answered,
 	}
 
 	groupErrs, ctx := errgroup.WithContext(ctx)

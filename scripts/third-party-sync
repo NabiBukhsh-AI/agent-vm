@@ -9,7 +9,10 @@
 #
 # A patch that does not apply stops it, with nothing changed: rebase that
 # patch on the new upstream first. Edits made by hand in third_party/ are
-# lost here and caught by --check: make them a patch instead.
+# lost here and caught by --check (contents, executable bits and symbolic
+# links): make them a patch instead.
+#
+# Needs git, awk, find, diff and, to rewrite third_party/<name>, rsync.
 
 set -euo pipefail
 
@@ -60,7 +63,7 @@ build() {
   # the clone above leaves their folders empty, and empty folders cannot be
   # committed, so without this the check always differs.
   git -C "$dir" ls-files -s | awk '$1 == "160000" { sub(/^[^\t]*\t/, ""); print }' \
-    | while IFS= read -r g; do rm -rf "$dir/$g"; done
+    | while IFS= read -r g; do rm -rf "${dir:?}/$g"; done
   find "$dir" -type d -empty -delete
   rm -rf "$dir/.git"
   if [ "$omit" != - ]; then
@@ -70,11 +73,18 @@ build() {
   printf '%s %s\n' "$commit" "$version" > "$TMP/$name.commit"
 }
 
+# What diff -r does not see: the files that are executable, and the symbolic
+# links (git records the one mode bit, and links as such).
+shape() {
+  ( cd "$1" && { find . -type f -perm -u+x -exec echo "x {}" \; ; find . -type l -exec echo "l {}" \; ; } | LC_ALL=C sort )
+}
+
 st=0
 for name in $names; do
   build "$name"
   if [ "$mode" == check ]; then
-    if diff -r -q "$TMP/$name" "$ROOT/third_party/$name" >&2; then
+    if diff -r -q "$TMP/$name" "$ROOT/third_party/$name" >&2 \
+       && diff <(shape "$TMP/$name") <(shape "$ROOT/third_party/$name") >&2; then
       printf 'third_party/%s: upstream and patches, unchanged\n' "$name"
     else
       printf 'third_party/%s: differs from upstream and patches (above)\n' "$name" >&2

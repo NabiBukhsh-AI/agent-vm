@@ -231,7 +231,7 @@ out="$(winst --dir "$SB/wother")"; rc=$?
 check "a directory of the user's: refused, left as it was" "$rc:$(ls "$SB/wother")" "1:notes"
 
 # A clone: agent-vm.sh builds it, then runs its install.
-rm -rf "$WDIR" "$WH/bin"
+rm -rf "${WDIR:?}" "${WH:?}/bin"
 : > "$WF/log"; : > "$WF/builds"
 out="$(winst --git)"; rc=$?
 check "--git: clones" "$rc:$(head -n 1 "$WF/log")" "0:git clone https://github.com/sylvinus/agent-vm.git $WDIR"

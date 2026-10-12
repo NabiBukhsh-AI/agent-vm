@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/sylvinus/agent-vm/internal/paths"
 	"github.com/sylvinus/agent-vm/internal/state"
@@ -19,20 +22,33 @@ import (
 )
 
 // `install` puts agent-vm on the PATH: a link to this executable in
-// AGENT_VM_BIN_DIR (default ~/.local/bin), or a copy where no link can be
+// AGENT_VM_BIN_DIR (default ~/.local/bin), or a copy where links cannot be
 // made (Windows without the symlink privilege). Safe to re-run.
 
-func binLink() string {
-	dir := os.Getenv("AGENT_VM_BIN_DIR")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "bin")
-	}
-	name := "agent-vm"
+// binName is the file install makes.
+func binName() string {
 	if runtime.GOOS == "windows" {
-		name += ".exe"
+		return "agent-vm.exe"
 	}
-	return filepath.Join(dir, name)
+	return "agent-vm"
+}
+
+// binLink is where install puts agent-vm: in AGENT_VM_BIN_DIR, made
+// absolute, or ~/.local/bin. An error without a home folder to put it in.
+func binLink() (string, error) {
+	dir := os.Getenv("AGENT_VM_BIN_DIR")
+	if dir != "" {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(abs, binName()), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", errors.New("cannot find your home folder: set AGENT_VM_BIN_DIR to the folder to install in")
+	}
+	return filepath.Join(home, ".local", "bin", binName()), nil
 }
 
 // self is this executable, links resolved.
@@ -50,9 +66,39 @@ func ours(link, exe string) bool {
 	if t, err := os.Readlink(link); err == nil {
 		return t == exe
 	}
-	a, err1 := os.ReadFile(link)
-	b, err2 := os.ReadFile(exe)
-	return err1 == nil && err2 == nil && bytes.Equal(a, b)
+	return sameContent(link, exe)
+}
+
+// sameContent reports whether the files a and b hold the same bytes, read
+// in blocks: they are executables of tens of megabytes.
+func sameContent(a, b string) bool {
+	fa, err := os.Open(a)
+	if err != nil {
+		return false
+	}
+	defer fa.Close()
+	fb, err := os.Open(b)
+	if err != nil {
+		return false
+	}
+	defer fb.Close()
+	sa, erra := fa.Stat()
+	sb, errb := fb.Stat()
+	if erra != nil || errb != nil || !sa.Mode().IsRegular() || !sb.Mode().IsRegular() || sa.Size() != sb.Size() {
+		return false
+	}
+	eof := func(err error) bool { return err == io.EOF || err == io.ErrUnexpectedEOF }
+	ba, bb := make([]byte, 1<<16), make([]byte, 1<<16)
+	for {
+		na, erra := io.ReadFull(fa, ba)
+		nb, errb := io.ReadFull(fb, bb)
+		if na != nb || !bytes.Equal(ba[:na], bb[:nb]) {
+			return false
+		}
+		if erra != nil || errb != nil {
+			return eof(erra) && eof(errb)
+		}
+	}
 }
 
 // installedCopy records the hash of the copy install made, so the next one
@@ -60,21 +106,31 @@ func ours(link, exe string) bool {
 const installedCopy = "installed-copy.sha256"
 
 func sha256Of(p string) string {
-	b, err := os.ReadFile(p)
+	f, err := os.Open(p)
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf("%x", sha256.Sum256(b))
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // earlier reports whether link is what an earlier install made: 0.2's link
-// to its agent-vm.sh, or a copy install recorded.
+// to its agent-vm.sh, a link to an agent-vm that is gone (a clone or a
+// version since removed), or a copy install recorded.
 func (e *app) earlier(link string) bool {
 	if t, err := os.Readlink(link); err == nil {
-		return filepath.Base(t) == "agent-vm.sh"
+		if filepath.Base(t) == "agent-vm.sh" {
+			return true
+		}
+		_, err := os.Stat(link)
+		return errors.Is(err, fs.ErrNotExist) && (filepath.Base(t) == "agent-vm" || filepath.Base(t) == "agent-vm.exe")
 	}
 	h := sha256Of(link)
-	return h != "" && h == strings.TrimSpace(e.state.Read(e.state.Path(installedCopy)))
+	return h != "" && h == strings.TrimSpace(e.state.Read(installedCopy))
 }
 
 var rcSourcesRe = regexp.MustCompile(`(?m)^[^#\n]*agent-vm\.sh`)
@@ -94,7 +150,10 @@ func onPath(dir string) bool {
 // rcSourcesUs: an uncommented line of a usual rc file names agent-vm.sh, as
 // an install from before 0.2.0 added.
 func rcSourcesUs() bool {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
 	for _, f := range []string{".zshrc", ".bashrc", ".bash_profile", ".profile", ".zshenv"} {
 		if b, err := os.ReadFile(filepath.Join(home, f)); err == nil && rcSourcesRe.Match(b) {
 			return true
@@ -114,14 +173,19 @@ func (e *app) installCmd(ctx context.Context, args []string) int {
 		fmt.Fprintf(e.io.Stderr, "Error: cannot find this executable: %v\n", err)
 		return 1
 	}
-	link := binLink()
+	link, err := binLink()
+	if err != nil {
+		fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
+		return 1
+	}
 	dir := filepath.Dir(link)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
 		return 1
 	}
 	_, lerr := os.Lstat(link)
-	if lerr == nil && !ours(link, exe) && e.earlier(link) {
+	isOurs := lerr == nil && ours(link, exe)
+	if lerr == nil && !isOurs && e.earlier(link) {
 		if err := os.Remove(link); err != nil {
 			fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
 			return 1
@@ -129,24 +193,30 @@ func (e *app) installCmd(ctx context.Context, args []string) int {
 		fmt.Fprintf(w, "Replacing %s, from an earlier install\n", link)
 		lerr = os.ErrNotExist
 	}
+	var serr error
+	if lerr != nil {
+		serr = symlink(exe, link)
+	}
 	switch {
-	case ours(link, exe):
+	case isOurs:
 		fmt.Fprintf(w, "agent-vm is already linked at %s\n", link)
 	case lerr == nil:
 		fmt.Fprintf(e.io.Stderr, "Error: %s already exists and is not a link to %s.\n  Move it aside, or set AGENT_VM_BIN_DIR to another directory.\n", link, exe)
 		return 1
-	case os.Symlink(exe, link) == nil:
+	case serr == nil:
 		fmt.Fprintf(w, "Linked %s -> %s\n", link, exe)
+	case !symlinkUnsupported(serr):
+		fmt.Fprintf(e.io.Stderr, "Error: could not link %s to %s: %v\n", link, exe, serr)
+		return 1
 	default:
 		if err := copyFile(exe, link); err != nil {
-			fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(e.io.Stderr, "Error: could not copy %s to %s: %v\n", exe, link, err)
 			return 1
 		}
-		os.MkdirAll(string(e.state), 0o755)
-		if err := os.WriteFile(e.state.Path(installedCopy), []byte(sha256Of(link)+"\n"), 0o644); err != nil {
+		if err := e.state.Write(installedCopy, []byte(sha256Of(link)+"\n")); err != nil {
 			fmt.Fprintf(e.io.Stderr, "Warning: %v: the next install will not recognise this copy.\n", err)
 		}
-		fmt.Fprintf(w, "Installed %s, a copy of %s (no symlinks on this system)\n", link, exe)
+		fmt.Fprintf(w, "Installed %s, a copy of %s (links are not allowed here: %v)\n", link, exe, serr)
 	}
 	if !onPath(dir) {
 		if paths.Windows() {
@@ -160,15 +230,16 @@ func (e *app) installCmd(ctx context.Context, args []string) int {
 		fmt.Fprintln(w, "Your shell rc still sources agent-vm.sh, which this agent-vm replaces: remove that line.")
 	}
 	fmt.Fprintf(w, "\nagent-vm %s installed.\n", version.Version)
-	if b, err := e.backend(); err == nil {
+	// Looking only: installing must not move 0.2's VMs, which stops running ones.
+	if b, err := e.readOnlyBackend(); err == nil {
 		if base, err := b.Get(ctx, vmname.Template); err == nil && base != nil {
 			if _, err := os.Stat(e.state.Path(state.BaseVersion)); err == nil {
-				fmt.Fprintln(w, "Next:  cd your-project && agent-vm claude   # or opencode, codex, vibe")
+				fmt.Fprintln(w, "Next:  cd your-project && agent-vm claude   # or opencode, codex, vibe, pi")
 				return 0
 			}
 		}
 	}
-	if e.ui.HaveTTY() && e.ui.AskYN("Build the base VM now with 'agent-vm setup'? It takes a few minutes.", true) {
+	if e.ui.CanAsk() && e.ui.AskYN("Build the base VM now with 'agent-vm setup'? It takes a few minutes.", true) {
 		fmt.Fprintln(w)
 		return e.setupCmd(ctx, nil)
 	}
@@ -176,19 +247,44 @@ func (e *app) installCmd(ctx context.Context, args []string) int {
 	return 0
 }
 
+// symlink makes a link; a variable for the tests, on machines that allow
+// them.
+var symlink = os.Symlink
+
+// symlinkUnsupported reports whether err says that links cannot be made
+// here (Windows without the privilege, a file system without them), where a
+// copy does the work, as opposed to a failure a copy would meet too (a
+// read-only folder, a full disk).
+func symlinkUnsupported(err error) bool {
+	const errPrivilegeNotHeld = syscall.Errno(1314) // Windows
+	return errors.Is(err, errors.ErrUnsupported) || errors.Is(err, syscall.EPERM) || errors.Is(err, errPrivilegeNotHeld)
+}
+
+// copyFile copies src to dst through a temporary file in dst's folder,
+// renamed once complete: a copy that fails half way leaves nothing behind,
+// and dst is never a truncated executable.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	out, err := os.CreateTemp(filepath.Dir(dst), ".agent-vm-install-*")
 	if err != nil {
 		return err
 	}
 	_, err = io.Copy(out, in)
+	if err == nil {
+		err = out.Chmod(0o755)
+	}
 	if cerr := out.Close(); err == nil {
 		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(out.Name(), dst)
+	}
+	if err != nil {
+		os.Remove(out.Name())
 	}
 	return err
 }
@@ -201,11 +297,15 @@ func (e *app) uninstallCmd(args []string) int {
 		return 2
 	}
 	w := e.io.Stdout
-	link := binLink()
+	link, err := binLink()
+	if err != nil {
+		fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
+		return 1
+	}
 	exe, _ := self()
 	_, lerr := os.Lstat(link)
 	switch {
-	case exe != "" && ours(link, exe) || lerr == nil && e.earlier(link):
+	case lerr == nil && (exe != "" && ours(link, exe) || e.earlier(link)):
 		if err := os.Remove(link); err != nil {
 			fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
 			return 1

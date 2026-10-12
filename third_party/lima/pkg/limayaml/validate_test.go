@@ -5,6 +5,8 @@ package limayaml
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -341,6 +343,41 @@ func TestValidateReadonlyNames(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			y, err := Load(t.Context(), []byte(tt.config+"\n"+images), "lima.yaml")
+			assert.NilError(t, err)
+			err = Validate(y, false)
+			if tt.wantErr == "" {
+				assert.NilError(t, err)
+			} else {
+				assert.Error(t, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// A writable mount of a parent folder must protect the names of the writable
+// mounts inside it.
+func TestValidateReadonlyNamesNested(t *testing.T) {
+	images := `images: [{"location": "/"}]`
+	parent := t.TempDir()
+	child := filepath.Join(parent, "child")
+	assert.NilError(t, os.Mkdir(child, 0o755))
+	protected := "{sftpDriver: builtin, readonlyNames: [.git]}"
+	builtin := "{sftpDriver: builtin}"
+	config := func(parentWritable bool, parentSSHFS string) string {
+		return fmt.Sprintf("mountType: reverse-sshfs\nmounts: [{location: %q, writable: true, sshfs: %s}, {location: %q, writable: %v, sshfs: %s}]",
+			child, protected, parent, parentWritable, parentSSHFS)
+	}
+	for _, tt := range []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{"parent protects the same names", config(true, protected), ""},
+		{"parent is read-only", config(false, builtin), ""},
+		{"parent writes .git", config(true, builtin), "field `mounts[1].sshfs.readonlyNames` must contain `.git`, as the writable mount `mounts[0]` inside it does"},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
 			y, err := Load(t.Context(), []byte(tt.config+"\n"+images), "lima.yaml")
 			assert.NilError(t, err)

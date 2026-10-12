@@ -21,7 +21,9 @@ var probeAddrs = []string{"127.0.0.1", "::1", "0.0.0.0", "::"}
 // listening on 0.0.0.0:port: the guest would take the host's loopback clients
 // of that program. Each address is bound and closed at once, with the same
 // options as the forward (Control), so that only a socket bound to that exact
-// address, not one in TIME_WAIT, counts.
+// address, not one in TIME_WAIT, counts. The wildcard addresses are bound too,
+// as a listener on them is not seen from the loopback ones: this may make
+// macOS's firewall ask once whether to accept incoming connections.
 func inUse(ctx context.Context, protocol, hostAddress string) error {
 	if filepath.IsAbs(hostAddress) {
 		return nil

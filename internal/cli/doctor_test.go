@@ -46,9 +46,9 @@ func TestDoctor(t *testing.T) {
 	}
 	// The VM's shares without a name the project needs now.
 	v := se.fake.VMs[vmname.Name(se.proj)]
-	v.Mounts[0].SSHFS.ReadonlyNames = []string{".git", ".hg"}
+	v.Mounts[0].SSHFS.ReadonlyNames = []string{".git", ".hg", ".sl", ".jj"}
 	o = out()
-	if !strings.Contains(o, "  warn  its shares keep .git read-only, but not all of .git, .hg, .husky") ||
+	if !strings.Contains(o, "  warn  its shares keep .git read-only, but not all of .git, .hg, .sl, .jj, .husky") ||
 		!strings.Contains(o, "  warn  git runs hooks from .husky/_ (core.hooksPath), which the VM can still write") {
 		t.Errorf("older names:\n%s", o)
 	}

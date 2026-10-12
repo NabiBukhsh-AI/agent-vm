@@ -82,6 +82,8 @@ func dnsServer(configuration *types.Configuration, s *stack.Stack) (http.Handler
 		return nil, err
 	}
 
+	server.SetPolicy(configuration.DNSNames, configuration.DNSAnswered)
+
 	go func() {
 		if err := server.Serve(); err != nil {
 			log.Error(err)

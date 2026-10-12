@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# runtime.example.sh — Template for ~/.agent-vm/runtime.sh
+# runtime.example.sh: template for ~/.agent-vm/runtime.sh
 # =============================================================================
 #
 # This file runs inside the VM on every agent-vm command that enters one,

@@ -51,14 +51,14 @@ type ReverseSSHFS struct {
 // ExpectRemove makes the next removal of hostPath requested by the remote, within a few seconds,
 // succeed without touching hostPath. It is used to relay a local deletion to the remote,
 // by removing the path there, which emits an inotify event on the remote.
-// It returns false when unsupported, i.e., when not using DriverBuiltin on Linux, macOS, or Windows.
+// It returns false, and the removal must not be relayed, when unsupported (not using DriverBuiltin
+// on Linux, macOS, or Windows), or when the remote itself just removed or moved away hostPath.
 func (rsf *ReverseSSHFS) ExpectRemove(hostPath string) bool {
 	h := rsf.rooted.Load()
 	if h == nil {
 		return false
 	}
-	h.expectRemove(hostPath)
-	return true
+	return h.expectRemove(hostPath)
 }
 
 func (rsf *ReverseSSHFS) Prepare() error {
@@ -346,15 +346,15 @@ func (rsf *ReverseSSHFS) Close() error {
 		logrus.Debugf("killing processes for remote sshfs: %s %v", rsf.sshCmd.Path, rsf.sshCmd.Args)
 	}
 	var errors []error
-	if rsf.sshCmd != nil && rsf.sshCmd.Process != nil {
-		if err := rsf.sshCmd.Process.Kill(); err != nil {
+	for _, cmd := range []*exec.Cmd{rsf.sshCmd, rsf.opensshSftpServerCmd} {
+		if cmd == nil || cmd.Process == nil {
+			continue
+		}
+		if err := cmd.Process.Kill(); err != nil {
 			errors = append(errors, err)
 		}
-	}
-	if rsf.opensshSftpServerCmd != nil && rsf.opensshSftpServerCmd.Process != nil {
-		if err := rsf.opensshSftpServerCmd.Process.Kill(); err != nil {
-			errors = append(errors, err)
-		}
+		// Reap it, and close its pipes. The error is the kill itself, or a second Close.
+		_ = cmd.Wait()
 	}
 	if len(errors) > 0 {
 		return fmt.Errorf("%v", errors)

@@ -38,6 +38,73 @@ func TestDefault(t *testing.T) {
 	}
 }
 
+// Ranges that never lead to the internet, and IPv6 forms that embed an IPv4
+// address of this machine or its networks.
+func TestReserved(t *testing.T) {
+	p := &Policy{}
+	for dst, want := range map[string]bool{
+		"192.0.0.8:80":                              false, // IETF protocol assignments
+		"192.0.2.1:80":                              false,
+		"198.18.0.1:80":                             false, // benchmarking, proxies' fake IPs
+		"198.19.255.255:80":                         false,
+		"198.20.0.1:80":                             true,
+		"198.51.100.1:80":                           false,
+		"203.0.113.1:80":                            false,
+		"240.0.0.1:80":                              false,
+		"255.255.255.254:80":                        false,
+		"239.255.255.250:1900":                      false,
+		"100.64.0.1:80":                             false,
+		"100.127.255.255:80":                        false,
+		"100.128.0.1:80":                            true,
+		"169.254.1.1:80":                            false,
+		"[fec0::1]:80":                              false,
+		"[ff02::1]:80":                              false,
+		"[::127.0.0.1]:80":                          false, // IPv4-compatible
+		"[::ffff:10.0.0.1]:80":                      false,
+		"[::ffff:8.8.8.8]:80":                       true,
+		"[64:ff9b::7f00:1]:80":                      false, // NAT64 of 127.0.0.1
+		"[64:ff9b::c0a8:101]:80":                    false, // of 192.168.1.1
+		"[64:ff9b::808:808]:80":                     true,  // of 8.8.8.8
+		"[64:ff9b:1::a00:1]:80":                     false, // local-use NAT64
+		"[2002:7f00:1::1]:80":                       false, // 6to4 of 127.0.0.1
+		"[2002:a00:1::1]:80":                        false, // of 10.0.0.1
+		"[2002:808:808::1]:80":                      true,  // of 8.8.8.8
+		"[2001:0:4136:e378:8000:63bf:f7f7:f7f7]:80": true,  // Teredo, public server and client
+		"[2001:0:4136:e378:8000:63bf:80ff:fffe]:80": false, // client 127.0.0.1
+		"[2001:0:7f00:1:8000:63bf:f7f7:f7f7]:80":    false, // server 127.0.0.1
+		"[2001:0:4136:e378:8000:63bf:f5ff:fffe]:80": false, // client 10.0.0.1
+		"[2001:db8::1]:80":                          false,
+		"[100::1]:80":                               false,
+		"[2606:4700::1111]:443":                     true,
+	} {
+		if got := p.Allows("tcp", ap(dst)); got != want {
+			t.Errorf("%s: %v", dst, got)
+		}
+	}
+	// A zone does not hide a link-local address.
+	if p.Allows("tcp", netip.AddrPortFrom(netip.MustParseAddr("fe80::1%en0"), 80)) {
+		t.Error("zoned link-local")
+	}
+	// An allow line still opens one.
+	q := &Policy{Allow: []Rule{{Net: netip.MustParsePrefix("198.18.0.0/15")}}}
+	if !q.Allows("tcp", ap("198.18.0.5:80")) {
+		t.Error("allowed benchmarking range")
+	}
+}
+
+// Only tcp and udp are known: anything else is refused, unless open.
+func TestNetwork(t *testing.T) {
+	p := &Policy{}
+	for network, want := range map[string]bool{"tcp": true, "udp": true, "icmp": false, "": false, "tcp4": false} {
+		if got := p.Allows(network, ap("1.1.1.1:443")); got != want {
+			t.Errorf("%q: %v", network, got)
+		}
+	}
+	if !(&Policy{Open: true}).Allows("icmp", ap("127.0.0.1:1")) {
+		t.Error("open")
+	}
+}
+
 // What the user allows is reached, at its port only when one is given.
 func TestAllow(t *testing.T) {
 	dir := t.TempDir()

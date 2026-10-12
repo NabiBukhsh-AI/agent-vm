@@ -27,6 +27,9 @@ type dnsHandler struct {
 	zones     []types.Zone
 	zonesLock sync.RWMutex
 	upstream  upstreamResolver
+
+	names    func(name string) bool
+	answered func(name string, ips []net.IP)
 }
 
 func (h *dnsHandler) handle(w dns.ResponseWriter, r *dns.Msg, responseMessageSize int) {
@@ -118,6 +121,11 @@ func splitTxt(s string) []string {
 }
 func (h *dnsHandler) addAnswers(m *dns.Msg) {
 	for _, q := range m.Question {
+		if h.names != nil && !h.names(strings.TrimSuffix(q.Name, ".")) {
+			m.Answer = nil
+			m.Rcode = dns.RcodeNameError
+			return
+		}
 		if done := h.addLocalAnswers(m, q); done {
 			return
 		}
@@ -130,10 +138,12 @@ func (h *dnsHandler) addAnswers(m *dns.Msg) {
 				m.Rcode = dns.RcodeNameError
 				return
 			}
+			var given []net.IP
 			for _, ip := range ips {
 				if len(ip.IP.To4()) != net.IPv4len {
 					continue
 				}
+				given = append(given, ip.IP.To4())
 				m.Answer = append(m.Answer, &dns.A{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -143,6 +153,9 @@ func (h *dnsHandler) addAnswers(m *dns.Msg) {
 					},
 					A: ip.IP.To4(),
 				})
+			}
+			if h.answered != nil {
+				h.answered(strings.TrimSuffix(q.Name, "."), given)
 			}
 		case dns.TypeCNAME:
 			cname, err := resolver.LookupCNAME(context.TODO(), q.Name)
@@ -253,6 +266,12 @@ func New(udpConn net.PacketConn, tcpLn net.Listener, zones []types.Zone) (*Serve
 func NewWithUpstreamResolver(udpConn net.PacketConn, tcpLn net.Listener, zones []types.Zone, upstream upstreamResolver) (*Server, error) {
 	handler := &dnsHandler{zones: zones, upstream: upstream}
 	return &Server{udpConn: udpConn, tcpLn: tcpLn, handler: handler}, nil
+}
+
+// SetPolicy sets the hooks of Configuration.DNSNames and DNSAnswered. Call it
+// before Serve and ServeTCP.
+func (s *Server) SetPolicy(names func(name string) bool, answered func(name string, ips []net.IP)) {
+	s.handler.names, s.handler.answered = names, answered
 }
 
 func (s *Server) Serve() error {

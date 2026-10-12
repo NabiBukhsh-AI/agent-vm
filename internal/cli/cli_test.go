@@ -67,6 +67,10 @@ func TestMainBash(t *testing.T) {
 			want.Stdout = hash.ReplaceAllString(want.Stdout, "-HASH")
 			got.Stdout = hash.ReplaceAllString(got.Stdout, "-HASH")
 		}
+		// 0.3 exits with exitUsage for a wrong command line, where 0.2 had 1.
+		if want.Code == 1 && got.Code == exitUsage {
+			want.Code = exitUsage
+		}
 		if got.Stdout != want.Stdout || got.Stderr != want.Stderr || got.Code != want.Code {
 			t.Errorf("agent-vm %q:\n go:   %+v\n bash: %+v", args, got, want)
 		}
@@ -89,6 +93,7 @@ func TestHelp(t *testing.T) {
 			"AGENT_VM_BIN_DIR)\n",
 			"  ~/.agent-vm/network               What the VMs may reach (above)\n",
 			"  ~/.agent-vm/guarded               More files to ask about (above)\n",
+			"  licenses           Print the licenses of agent-vm and of what is built into it\n",
 		} {
 			s = strings.Replace(s, cut, "", 1)
 		}

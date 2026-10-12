@@ -1,6 +1,8 @@
 package vmname
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,8 +73,11 @@ func TestNameFits(t *testing.T) {
 	dir := "/home/u/" + strings.Repeat("long-folder-", 4)
 	n := Name(dir)
 	full := strings.TrimSuffix(strings.Repeat("long-folder-", 4), "-")
-	if len(n) != 20 || !strings.HasPrefix(n, "long-folder") || n[len(n)-9:] != Name(dir)[len(n)-9:] || strings.Contains(n, "--") {
-		t.Errorf("Name = %q", n)
+	// The hash is of the whole path, whatever the cut.
+	sum := sha256.Sum256([]byte(paths.Guest(dir)))
+	hash := "-" + hex.EncodeToString(sum[:])[:8]
+	if n != "long-folder"+hash {
+		t.Errorf("Name = %q, want %q", n, "long-folder"+hash)
 	}
 	if other := Name("/elsewhere/" + strings.Repeat("long-folder-", 4)); other == n {
 		t.Error("two folders, one name")
@@ -87,7 +92,7 @@ func TestNameFits(t *testing.T) {
 		t.Errorf("Scratch = %q", s)
 	}
 	MaxLen = 76
-	if Name(dir) != full+"-"+Name(dir)[len(Name(dir))-8:] {
+	if Name(dir) != full+hash {
 		t.Errorf("cut though it fits: %q", Name(dir))
 	}
 }

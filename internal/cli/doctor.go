@@ -76,13 +76,13 @@ func (e *app) doctorCmd(ctx context.Context, args []string) int {
 	d.line("info", runtime.GOOS+" "+runtime.GOARCH)
 	cpus, mem := host.CPUs(), host.MemGiB()
 	if cpus > 0 && mem > 0 {
-		div := os.Getenv("AGENT_VM_HOST_SHARE")
-		if div == "" {
-			div = "2"
-		}
+		div, bad, invalid := host.Divisor()
 		var discard bytes.Buffer
-		d.line("info", fmt.Sprintf("%d CPUs, %d GiB RAM; a VM gets at most %d CPUs and %d GiB (AGENT_VM_HOST_SHARE=%s)",
+		d.line("info", fmt.Sprintf("%d CPUs, %d GiB RAM; a VM gets at most %d CPUs and %d GiB (a 1/%d share)",
 			cpus, mem, host.Cap("cpus", cpus, &discard), host.Cap("memory", mem, &discard), div))
+		if invalid {
+			d.line("warn", fmt.Sprintf("AGENT_VM_HOST_SHARE='%s' is not a positive integer: 2 is used", bad))
+		}
 	} else {
 		d.line("warn", "could not read the host's CPU or RAM: --cpus and --memory are not clamped")
 	}
@@ -148,11 +148,9 @@ func (e *app) doctorCmd(ctx context.Context, args []string) int {
 
 	d.section("Base template")
 	b, berr := e.readOnlyBackend()
-	if old := oldLimaHome(); !e.migrated() {
-		if vms, _ := vm.FindOld(old, vmname.OldPrefix); len(vms) > 0 {
-			d.line("info", fmt.Sprintf("%d VM(s) of agent-vm 0.2 in %s, not moved yet", len(vms), old),
-				"The next agent-vm command that uses VMs ('agent-vm list', for one) offers to move them.")
-		}
+	if vms, old := e.unmovedOld(); len(vms) > 0 {
+		d.line("info", fmt.Sprintf("%d VM(s) of agent-vm 0.2 in %s, not moved yet", len(vms), old),
+			"The next agent-vm command that starts or removes a VM offers to move them.")
 	}
 	getVM := func(name string) (*vm.Instance, error) {
 		if berr != nil {
@@ -170,7 +168,7 @@ func (e *app) doctorCmd(ctx context.Context, args []string) int {
 	case err != nil:
 		d.line("warn", "could not query Lima")
 	case base != nil && merr == nil:
-		if built, perr := strconv.ParseInt(e.state.Read(e.state.Path(state.BaseVersion)), 10, 64); perr == nil {
+		if built, perr := strconv.ParseInt(e.state.Read(state.BaseVersion), 10, 64); perr == nil {
 			d.line("ok", fmt.Sprintf("%s is ready, built %s", vmname.Template, time.Unix(built, 0).Format("2006-01-02")))
 			if time.Since(time.Unix(built, 0)) > 90*24*time.Hour {
 				d.line("warn", "the base template is over 90 days old", "Its agents and packages are as old. 'agent-vm setup' rebuilds it.")
@@ -225,7 +223,7 @@ func (e *app) doctorCmd(ctx context.Context, args []string) int {
 	d.directory(ctx, wd, protects, getVM)
 
 	d.section("All VMs")
-	if vms, err := e.agentVMs(ctx); err == nil {
+	if vms, err := e.lookVMs(ctx); err == nil {
 		n, c, m := 0, 0, 0
 		for _, v := range vms {
 			if v.Status == vm.Running {
@@ -242,8 +240,12 @@ func (e *app) doctorCmd(ctx context.Context, args []string) int {
 			d.line("info", fmt.Sprintf("%d running, %d CPUs and %d GiB in total", n, c, m))
 		}
 	}
-	for _, left := range e.scratchLeftovers() {
+	dead, unknown := e.scratchLeftovers()
+	for _, left := range dead {
 		d.line("warn", "scratch VM "+left+" was left by a run that did not finish", "The next --scratch run deletes it, or: agent-vm rm "+left)
+	}
+	for _, left := range unknown {
+		d.line("warn", "scratch VM "+left+" has a record without a process number: not known whether a run still uses it", "agent-vm rm "+left+" deletes it.")
 	}
 
 	fmt.Fprintln(w)

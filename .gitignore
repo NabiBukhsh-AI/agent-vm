@@ -3,8 +3,8 @@
 node_modules
 dist
 /_output
-# Local working copies: the forks (third_party/ holds what is built), and
-# the 0.3 drafts superseded by patches/.
+# Scratch checkouts and patch files for working on patches/. third_party/
+# holds what is built.
 /lima/
 /lima-pr/
 /tmp/

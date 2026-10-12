@@ -8,14 +8,17 @@
 package gitguard
 
 import (
-	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -182,9 +185,38 @@ func hops(p string) []string {
 	return out
 }
 
+// gitTimeout bounds each call to git: a hung one (a network file system, a
+// config program waiting on a prompt) must not stall the start.
+var gitTimeout = 15 * time.Second
+
+// gitError is a failed call to git: its exit status (-1 when it did not run
+// to the end) and the first line it said on stderr.
+type gitError struct {
+	code int
+	msg  string
+}
+
+func (e *gitError) Error() string {
+	if e.msg == "" {
+		return fmt.Sprintf("git exited with status %d", e.code)
+	}
+	return e.msg
+}
+
+// notRepo: git found no repository there, which is no failure to check.
+func notRepo(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not a git repository")
+}
+
+// unset: `git config --get` found no such key.
+func unset(err error) bool {
+	var ge *gitError
+	return errors.As(err, &ge) && ge.code == 1 && ge.msg == ""
+}
+
 // git runs git for the repository at of kind kind: W a work tree, B a bare
 // repository (named explicitly, as safe.bareRepository=explicit allows), G
-// none, for git's own global and system config.
+// none, for git's own global and system config. The output is git's as is.
 func (s *scan) git(kind, at string, args ...string) ([]byte, error) {
 	switch kind {
 	case "W":
@@ -194,25 +226,73 @@ func (s *scan) git(kind, at string, args ...string) ([]byte, error) {
 	default:
 		args = append([]string{"-C", "/"}, args...)
 	}
-	out, err := gitx.Untrusted(s.ctx, args...).Output()
-	// As $(...): every trailing newline goes.
-	return bytes.TrimRight(out, "\n"), err
+	ctx, cancel := context.WithTimeout(s.ctx, gitTimeout)
+	defer cancel()
+	cmd := gitx.Untrusted(ctx, args...)
+	// Messages in English: notRepo reads them.
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANGUAGE=C")
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
+	if err == nil {
+		return out, nil
+	}
+	if ctx.Err() != nil {
+		return nil, &gitError{-1, "git did not answer in time"}
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		msg, _, _ := strings.Cut(strings.TrimSpace(string(ee.Stderr)), "\n")
+		return out, &gitError{ee.ExitCode(), msg}
+	}
+	return nil, &gitError{-1, err.Error()}
+}
+
+// line is the output of a command printing one value, as git ends it.
+func line(out []byte) string { return strings.TrimSuffix(string(out), "\n") }
+
+// unchecked adds the risk of something the scan could not look at: nothing
+// is known of it, which is not the same as nothing being there.
+func (s *scan) unchecked(what, where string, err error) {
+	s.risk(risk{text: "could not check " + what + " of " + s.name(where) + ": " + err.Error()})
+}
+
+// name is p as shown to the user.
+func (s *scan) name(p string) string {
+	if p = s.shown(p); p == "." {
+		return "the project"
+	}
+	return p
 }
 
 // repo is a repository found in a share.
 type repo struct{ kind, at string }
 
+const (
+	// maxRepos is how many repositories are checked in a share.
+	maxRepos = 50
+	// maxRepoDepth is how many folders down from a share a repository's root
+	// is looked for.
+	maxRepoDepth = 6
+)
+
+// maxFolders is how many folders are read looking for them, per share.
+var maxFolders = 20000
+
 // repos are those git on this machine finds in the share dir: the one
-// holding dir, then work trees and bare repositories up to two levels below
-// it (node_modules skipped), 50 at most; an X entry when there are more.
+// holding dir, then work trees and bare repositories up to maxRepoDepth
+// levels below it (node_modules skipped), maxRepos at most; an X entry when
+// there are more. Reading more than maxFolders folders stops the search, said
+// as a risk.
 func (s *scan) repos(dir string) []repo {
 	var out []repo
 	if _, err := s.git("W", dir, "rev-parse", "--git-dir"); err == nil {
 		out = append(out, repo{"W", dir})
+	} else if !notRepo(err) {
+		s.unchecked("the repository", dir, err)
 	}
-	n := 0
+	n, folders := 0, 0
 	found := func(g string) bool {
-		if n++; n > 50 {
+		if n++; n > maxRepos {
 			out = append(out, repo{"X", dir})
 			return false
 		}
@@ -223,12 +303,20 @@ func (s *scan) repos(dir string) []repo {
 		}
 		return true
 	}
-	// As `find dir/ -mindepth 2 -maxdepth 3 ( -name node_modules -prune ) -o
-	// ( -name .git -print -prune ) -o ( -name objects -type d -print -prune )`.
+	// As `find dir/ -mindepth 2 -maxdepth N ( -name node_modules -prune ) -o
+	// ( -name .git -print -prune ) -o ( -name objects -type d -print -prune )`,
+	// and no .git entered.
 	var walk func(d string, depth int) bool
 	walk = func(d string, depth int) bool {
+		if folders++; folders > maxFolders {
+			s.risk(risk{text: fmt.Sprintf("repositories in %s: stopped looking after %d folders", s.name(dir), maxFolders)})
+			return false
+		}
 		ents, err := os.ReadDir(d)
 		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				s.unchecked("the folder", d, err)
+			}
 			return true
 		}
 		for _, e := range ents {
@@ -249,7 +337,7 @@ func (s *scan) repos(dir string) []repo {
 					continue
 				}
 			}
-			if depth+1 < 3 && e.IsDir() {
+			if e.Name() != ".git" && depth+1 <= maxRepoDepth && e.IsDir() {
 				if !walk(p, depth+1) {
 					return false
 				}
@@ -274,9 +362,12 @@ func (s *scan) hooksDir(kind, at string) (top, hooks string, ok bool) {
 	case "G":
 		out, err := s.git("G", "/", "config", "--get", "core.hooksPath")
 		if err != nil {
+			if !unset(err) {
+				s.risk(risk{text: "could not check git's own config: " + err.Error()})
+			}
 			return "", "", false
 		}
-		hooks = string(out)
+		hooks = line(out)
 		if strings.HasPrefix(hooks, "~/") {
 			hooks = s.home + hooks[1:]
 		}
@@ -284,26 +375,42 @@ func (s *scan) hooksDir(kind, at string) (top, hooks string, ok bool) {
 			return "", "", false
 		}
 	case "W":
-		out, err := s.git("W", at, "rev-parse", "--show-toplevel", "--git-path", "hooks")
+		// Two calls: a path may hold a newline, which would split one.
+		out, err := s.git("W", at, "rev-parse", "--show-toplevel")
+		if err == nil {
+			top = line(out)
+		} else if strings.Contains(err.Error(), "work tree") {
+			// Inside a repository's own folder: no top.
+			err = nil
+		}
+		if err == nil {
+			out, err = s.git("W", at, "rev-parse", "--git-path", "hooks")
+			hooks = line(out)
+		}
 		if err != nil {
+			if !notRepo(err) {
+				s.unchecked("the hooks", at, err)
+			}
 			return "", "", false
 		}
-		t, h, two := strings.Cut(string(out), "\n")
-		if !two {
-			return "", "", false
-		}
-		top, hooks = t, h
 		if base, ok = Spelling(at); !ok {
 			return "", "", false
 		}
 	default:
 		out, err := s.git(kind, at, "rev-parse", "--git-path", "hooks")
 		if err != nil {
+			if !notRepo(err) {
+				s.unchecked("the hooks", at, err)
+			}
 			return "", "", false
 		}
-		hooks = string(out)
+		hooks = line(out)
+		// A relative core.hooksPath is taken from the repository's folder.
+		if kind == "B" {
+			base = at
+		}
 	}
-	if hooks == "" || strings.ContainsAny(hooks, "\n\t") || strings.Contains(top, "\t") {
+	if hooks == "" {
 		return "", "", false
 	}
 	return top, gitAbs(hooks, base), true
@@ -355,18 +462,37 @@ func (s *scan) risk(r risk) {
 	s.risks = append(s.risks, r)
 }
 
+// unprintable: a control character, or one that prints nothing or reorders
+// text (U+202E, zero-width characters...), but a space.
+func unprintable(r rune) bool { return r != ' ' && !unicode.IsPrint(r) }
+
+// visible is t with what a terminal would act on, or what hides text,
+// replaced by "?".
 func visible(t string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unprintable(r) {
 			return '?'
 		}
 		return r
 	}, t)
 }
 
-// The settings that hold a command git runs (section and key names
-// lowercased, as `git config --list` prints them).
-var commandKey = regexp.MustCompile(`^(core\.(fsmonitor|sshcommand|editor|pager|askpass|gitproxy|alternaterefscommand)|sequence\.editor|gpg\.program|gpg\..*\.program|gpg\.ssh\.defaultkeycommand|diff\.external|diff\..*\.(command|textconv)|(difftool|mergetool|browser|man)\..*\.(cmd|path)|guitool\..*\.cmd|merge\..*\.driver|filter\..*\.(clean|smudge|process)|credential\.helper|credential\..*\.helper|pager\..*|alias\..*|interactive\.difffilter|uploadpack\.packobjectshook|web\.browser|instaweb\.httpd|trailer\..*\.(cmd|command)|submodule\..*\.update|remote\..*\.(uploadpack|receivepack)|tar\..*\.command|sendemail\.(.*\.)?(smtpserver|sendmailcmd|tocmd|cccmd|headercmd))$`)
+// The settings that hold a command git runs, or a folder whose hooks it
+// copies (section and key names lowercased, as `git config --list` prints
+// them). hook.<name>.command is git 2.54's; imap.tunnel is git imap-send's;
+// the lfs ones are git-lfs's, which git runs through its filters.
+var commandKey = regexp.MustCompile(`^(core\.(fsmonitor|sshcommand|editor|pager|askpass|gitproxy|alternaterefscommand)|sequence\.editor|gpg\.program|gpg\..*\.program|gpg\.ssh\.defaultkeycommand|diff\.external|diff\..*\.(command|textconv)|(difftool|mergetool|browser|man)\..*\.(cmd|path)|guitool\..*\.cmd|merge\..*\.driver|filter\..*\.(clean|smudge|process)|credential\.helper|credential\..*\.helper|pager\..*|alias\..*|interactive\.difffilter|uploadpack\.packobjectshook|web\.browser|instaweb\.httpd|trailer\..*\.(cmd|command)|submodule\..*\.update|remote\..*\.(uploadpack|receivepack)|tar\..*\.command|sendemail\.(.*\.)?(smtpserver|sendmailcmd|tocmd|cccmd|headercmd)|hook\..*\.command|imap\.tunnel|lfs\.customtransfer\..*\.path|lfs\.extension\..*\.(clean|smudge)|init\.templatedir)$`)
+
+// unquote is w with one quote of either kind off each end.
+func unquote(w string) string {
+	if w != "" && (w[0] == '"' || w[0] == '\'') {
+		w = w[1:]
+	}
+	if n := len(w); n > 0 && (w[n-1] == '"' || w[n-1] == '\'') {
+		w = w[:n-1]
+	}
+	return w
+}
 
 var includeKey = regexp.MustCompile(`^includeif\..*\.path$`)
 
@@ -388,7 +514,13 @@ func (s *scan) config(kind, at, cmdBase string) {
 	}
 	// -z: each entry is its origin, a NUL, the key, a newline, the value, a
 	// NUL. Origins come unquoted, whatever their characters.
-	out, _ := s.git(kind, at, "config", "--list", "--show-origin", "--includes", "-z")
+	out, err := s.git(kind, at, "config", "--list", "--show-origin", "--includes", "-z")
+	if err != nil {
+		if !notRepo(err) {
+			s.unchecked("the config", at, err)
+		}
+		return
+	}
 	fields := strings.Split(string(out), "\x00")
 	seenFile := map[string]bool{}
 	for i := 0; i+1 < len(fields); i += 2 {
@@ -422,15 +554,17 @@ func (s *scan) config(kind, at, cmdBase string) {
 		// no name protects is the one that counts.
 		r := risk{text: key + " = " + val}
 		for i, w := range strings.FieldsFunc(strings.TrimPrefix(val, "!"), func(r rune) bool { return r == ' ' || r == '\t' }) {
-			// One quote of either kind off each end.
-			if w[0] == '"' || w[0] == '\'' {
-				w = w[1:]
+			w = unquote(w)
+			// An assignment or an option's value (--upload-pack=./x, or
+			// ProxyCommand=./x after ssh's -o): the word is what follows the
+			// =, and only a path counts.
+			if _, after, ok := strings.Cut(w, "="); ok {
+				if w = unquote(after); !strings.Contains(w, "/") {
+					continue
+				}
 			}
-			if n := len(w); n > 0 && (w[n-1] == '"' || w[n-1] == '\'') {
-				w = w[:n-1]
-			}
-			// Not an option, an assignment or a URL: a path.
-			if w == "" || strings.HasPrefix(w, "-") || strings.Contains(w, "=") || strings.Contains(w, "://") {
+			// Not an option or a URL: a path.
+			if w == "" || strings.HasPrefix(w, "-") || strings.Contains(w, "://") {
 				continue
 			}
 			// Without a /, the command is found on PATH; an argument is a
@@ -474,7 +608,8 @@ type Result struct {
 // Risks are the risks to accept, as text, each once, when the shares get
 // names (the names always listed, and the hooks names accepted): a config
 // file in a share, a setting whose command is in one, a hook linked to a
-// file in one, a share with more repositories than are checked. What a
+// file in one, a share with more repositories than are checked, something git
+// could not be asked about (an error, no answer in time). What a
 // name keeps read-only is no risk; a declined hooks name keeps nothing.
 func (r *Result) Risks(names []string) []string {
 	var out []string
@@ -572,7 +707,7 @@ func Scan(ctx context.Context, shares []string, home string) *Result {
 		top, hooks, ok := s.hooksDir(r.kind, r.at)
 		if !ok && r.kind == "W" {
 			if out, err := s.git("W", r.at, "rev-parse", "--show-toplevel"); err == nil {
-				top = string(out)
+				top = line(out)
 			}
 		}
 		hookss[i], tops[i] = hooks, top
@@ -601,7 +736,7 @@ func Scan(ctx context.Context, shares []string, home string) *Result {
 			if n, ok := HooksName(inRepo); ok && !mounts.UnderName(rel, []string{n}) {
 				inRepo = "."
 			}
-			if strings.IndexFunc(inRepo, unicode.IsControl) >= 0 {
+			if strings.IndexFunc(inRepo, unprintable) >= 0 {
 				inRepo = ""
 			}
 			shown := s.shown(hp)
@@ -620,14 +755,29 @@ func Scan(ctx context.Context, shares []string, home string) *Result {
 			continue
 		}
 		// As the shell's "$hp"/*: no dotfiles.
-		ents, _ := os.ReadDir(hp)
+		ents, err := os.ReadDir(hp)
+		if err != nil {
+			s.unchecked("the hooks", hp, err)
+		}
 		for _, e := range ents {
 			f := hp + "/" + e.Name()
-			if strings.HasPrefix(e.Name(), ".") || e.Type()&fs.ModeSymlink == 0 || strings.HasSuffix(f, ".sample") {
+			if strings.HasPrefix(e.Name(), ".") || strings.HasSuffix(f, ".sample") {
+				continue
+			}
+			if e.Type().IsRegular() {
+				// Another name for the file may be in a share: the VM writes
+				// the file through it, whatever .git says.
+				if linked(f) {
+					s.risk(risk{text: "hook " + e.Name() + " has other hard links: one may be in a share"})
+				}
+				continue
+			}
+			if e.Type()&fs.ModeSymlink == 0 {
 				continue
 			}
 			t, err := os.Readlink(f)
 			if err != nil {
+				s.unchecked("the hook "+e.Name(), hp, err)
 				continue
 			}
 			s.risk(risk{prefix: "hook " + e.Name() + " runs ", hops: s.hits(gitAbs(filepath.ToSlash(t), hp))})
@@ -643,7 +793,7 @@ func Scan(ctx context.Context, shares []string, home string) *Result {
 func HooksName(rel string) (string, bool) {
 	name, _, _ := strings.Cut(rel, "/")
 	// Nothing JSON would escape on its way into Lima's config either.
-	if rel == "." || name == "" || strings.ContainsAny(name, "\"\\\u2028\u2029") || strings.IndexFunc(name, unicode.IsControl) >= 0 || !utf8.ValidString(name) {
+	if rel == "." || name == "" || strings.ContainsAny(name, "\"\\\u2028\u2029") || strings.IndexFunc(name, unprintable) >= 0 || !utf8.ValidString(name) {
 		return "", false
 	}
 	return name, true

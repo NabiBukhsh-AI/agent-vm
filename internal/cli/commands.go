@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/sylvinus/agent-vm/internal/paths"
@@ -21,32 +21,66 @@ import (
 // command. It returns the exit status.
 type session func(s *start) int
 
+// endedBySignal is ctx for a run that a kill or a closed terminal (SIGTERM,
+// SIGHUP) must end: the command in the VM stops with it, and the cleanup
+// that follows (--rm, --scratch) runs on a context that does not end. A
+// Ctrl-C is not one: see inVM. Signals after the first are swallowed until
+// stop, so that the cleanup is not cut short.
+func endedBySignal(parent context.Context) (ctx context.Context, stop func()) {
+	ctx, cancel := context.WithCancel(parent)
+	sig := make(chan os.Signal, 4)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGHUP)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-sig:
+				cancel()
+			case <-done:
+				return
+			}
+		}
+	}()
+	return ctx, func() {
+		signal.Stop(sig)
+		close(done)
+		cancel()
+	}
+}
+
 // inVM starts this directory's VM with opts, runs fn, then deletes the VM
-// when --rm asked. --scratch: see scratch.
+// when --rm asked: after fn whatever it returns, and after a start that
+// failed when this run made the VM (a VM that was there before is not
+// deleted for a start that did not go through). A kill or a closed terminal
+// (SIGTERM, SIGHUP) ends the command and still deletes. --scratch: see
+// scratch.
 func (e *app) inVM(ctx context.Context, opts VMOpts, fn session) int {
 	dir, err := vmname.AbsDir("")
 	if err != nil {
 		fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
 		return 1
 	}
+	cleanup := context.WithoutCancel(ctx)
+	ctx, stop := endedBySignal(ctx)
+	defer stop()
 	if opts.Scratch {
-		return e.scratch(ctx, opts, dir, fn)
+		return e.scratch(ctx, cleanup, opts, dir, fn)
 	}
 	s := &start{app: e, ctx: ctx, opts: opts, dir: dir, name: vmname.Name(dir)}
-	if s.ensureRunning() != nil {
-		return 1
+	st := 1
+	started := s.ensureRunning() == nil
+	if started {
+		s.printResources()
+		// A Ctrl-C is the command's, in the VM, as a shell leaves it to the job
+		// it waits on: this run goes on to --rm and the terminal's reset.
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt)
+		st = fn(s)
+		signal.Stop(sig)
+		ui.ResetTermModes(os.Stdout)
 	}
-	s.printResources()
-	// A Ctrl-C is the command's, in the VM, as a shell leaves it to the job
-	// it waits on: this run goes on to --rm and the terminal's reset.
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
-	st := fn(s)
-	signal.Stop(sig)
-	ui.ResetTermModes(os.Stdout)
-	if opts.RM {
-		fmt.Fprintln(e.io.Stdout, "Removing VM...")
-		e.rmCmd(ctx, nil)
+	if opts.RM && (started || s.created) && !e.removeVM(cleanup, s.name) && st == 0 {
+		st = 1
 	}
 	return st
 }
@@ -57,7 +91,7 @@ func (s *start) printResources() {
 	if inst, err := s.get(s.name); err == nil && inst != nil {
 		fmt.Fprintf(s.io.Stdout, "  Resources: CPUs: %d, Memory: %d GiB, Disk: %d GiB\n", inst.CPUs, inst.Memory>>30, inst.Disk>>30)
 	}
-	if built, err := strconv.ParseInt(s.state.Read(s.state.Marker(state.VersionOf, s.name)), 10, 64); err == nil && built >= 0 {
+	if built, err := strconv.ParseInt(s.state.ReadMarker(state.VersionOf, s.name), 10, 64); err == nil && built >= 0 {
 		fmt.Fprintf(s.io.Stdout, "  Base VM: built %s\n", time.Unix(built, 0).Format("2006-01-02"))
 	}
 }
@@ -110,7 +144,7 @@ func (e *app) agentCmd(ctx context.Context, agent string, opts VMOpts, args []st
 	rest, tty, err := opts.split(args)
 	if err != nil {
 		fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
-		return 1
+		return exitUsage
 	}
 	cmd := append(append([]string(nil), a.cmd...), rest...)
 	return e.inVM(ctx, opts, func(s *start) int { return s.lima(a.tty || tty, cmd...) })
@@ -122,11 +156,11 @@ func (e *app) runCmd(ctx context.Context, opts VMOpts, args []string) int {
 	rest, tty, err := opts.split(args)
 	if err != nil {
 		fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
-		return 1
+		return exitUsage
 	}
 	if len(rest) == 0 {
 		fmt.Fprintln(e.io.Stderr, "Usage: agent-vm run [--tty] <command> [args]")
-		return 1
+		return exitUsage
 	}
 	return e.inVM(ctx, opts, func(s *start) int { return s.lima(tty, rest...) })
 }
@@ -139,7 +173,7 @@ func (e *app) shellCmd(ctx context.Context, opts VMOpts, args []string) int {
 		n, err := opts.take(args)
 		if err != nil {
 			fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
-			return 1
+			return exitUsage
 		}
 		if n > 0 {
 			args = args[n:]
@@ -149,18 +183,17 @@ func (e *app) shellCmd(ctx context.Context, opts VMOpts, args []string) int {
 		case "-c", "--command":
 			if len(args) < 2 || args[1] == "" {
 				fmt.Fprintln(e.io.Stderr, "Error: -c/--command requires a command string.")
-				return 1
+				return exitUsage
 			}
 			command, args = args[1], args[2:]
 		default:
 			fmt.Fprintf(e.io.Stderr, "Error: unknown argument for shell: %s\nUsage: agent-vm [vm options] shell [-c \"command\"]\n", args[0])
-			return 1
+			return exitUsage
 		}
 	}
 	return e.inVM(ctx, opts, func(s *start) int {
 		if command != "" {
-			code, _ := s.shellTo(false, "zsh", "-l", "-c", command)
-			return code
+			return s.shell(false, "zsh", "-l", "-c", command)
 		}
 		fmt.Fprintf(s.io.Stdout, "VM: %s | Dir: %s\n", s.name, s.dir)
 		if s.opts.RM {
@@ -168,8 +201,7 @@ func (e *app) shellCmd(ctx context.Context, opts VMOpts, args []string) int {
 		} else {
 			fmt.Fprintln(s.io.Stdout, "Type 'exit' to leave (VM keeps running). Use 'agent-vm stop' to stop it.")
 		}
-		code, _ := s.shellTo(true, "zsh", "-l")
-		return code
+		return s.shell(true, "zsh", "-l")
 	})
 }
 
@@ -183,70 +215,88 @@ func (s *start) shellTo(tty bool, args ...string) (int, error) {
 		Stdin: s.io.Stdin, Stdout: s.io.Stdout, Stderr: s.io.Stderr, Interactive: tty})
 }
 
+// shell is shellTo's exit status. When the shell could not run at all (the
+// VM is not running, ssh fails), the reason is said and the status is 1: a
+// caller must not read that as the command's success.
+func (s *start) shell(tty bool, args ...string) int {
+	code, err := s.shellTo(tty, args...)
+	if err != nil {
+		s.warnf("Error: %v", err)
+		return 1
+	}
+	return code
+}
+
 // scratch: a new VM of its own, sharing nothing, deleted once fn returns,
 // whatever it returns, unless the user keeps it a while to look inside. A
 // Ctrl-C ends the command in the VM, not this run, which goes on to the
 // deletion. A run killed outright leaves its VM recorded with its pid, and
-// the next scratch run deletes it.
-func (e *app) scratch(ctx context.Context, opts VMOpts, dir string, fn session) int {
-	for _, left := range e.scratchLeftovers() {
+// the next scratch run deletes it. cleanup is the context of the deletions,
+// which a kill of this run (ctx) does not end.
+func (e *app) scratch(ctx, cleanup context.Context, opts VMOpts, dir string, fn session) int {
+	dead, unknown := e.scratchLeftovers()
+	for _, left := range dead {
 		fmt.Fprintf(e.io.Stdout, "Deleting scratch VM '%s', left by a run that did not finish...\n", left)
-		e.deleteVM(ctx, left)
+		e.deleteVM(cleanup, left)
+	}
+	for _, left := range unknown {
+		fmt.Fprintf(e.io.Stderr, "Note: scratch VM '%s' has a record without a process number, so it is not known whether a run still uses it: left alone. 'agent-vm rm %s' deletes it.\n", left, left)
 	}
 	name, err := vmname.Scratch(dir)
 	if err != nil {
 		fmt.Fprintf(e.io.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	if err := os.MkdirAll(string(e.state), 0o755); err != nil {
+	if err := e.state.Write(state.ScratchOf+name, []byte(strconv.Itoa(os.Getpid())+"\n")); err != nil {
+		fmt.Fprintf(e.io.Stderr, "Error: could not record scratch VM '%s': %v\n", name, err)
 		return 1
 	}
-	if err := os.WriteFile(e.state.Marker(state.ScratchOf, name), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
-		return 1
-	}
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
-	defer signal.Stop(sig)
 	opts.RM = true
 	s := &start{app: e, ctx: ctx, opts: opts, dir: dir, name: name}
 	st := 1
 	if s.ensureRunning() == nil {
 		s.printResources()
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt)
 		st = fn(s)
+		signal.Stop(sig)
 		ui.ResetTermModes(os.Stdout)
 		// Asked before the deletion, when it can be (yes by default): a no
 		// opens a shell in the VM, to look at what the command left, and
-		// asks again on its exit. No terminal, or a question cut short,
-		// deletes.
-		for e.ui.CanAsk() && !e.ui.AskYN(fmt.Sprintf("Delete scratch VM '%s'?", name), true) {
+		// asks again on its exit. No terminal, a question cut short, or a
+		// kill, deletes.
+		for ctx.Err() == nil && e.ui.CanAsk() && !e.ui.AskYN(fmt.Sprintf("Delete scratch VM '%s'?", name), true) {
 			fmt.Fprintf(e.io.Stdout, "A shell in scratch VM '%s'. Type 'exit' to be asked again.\n", name)
-			s.shellTo(true, "zsh", "-l")
+			s.shell(true, "zsh", "-l")
 			ui.ResetTermModes(os.Stdout)
 		}
 	}
 	fmt.Fprintf(e.io.Stdout, "Deleting scratch VM '%s'...\n", name)
-	if !e.deleteVM(ctx, name) {
+	if !e.deleteVM(cleanup, name) {
 		st = 1
 	}
 	return st
 }
 
 // scratchLeftovers are the scratch VMs a run could not delete (killed, its
-// terminal closed): recorded by a run whose pid is gone. A reused pid only
-// delays the cleanup. Only names Scratch makes: these go unasked.
-func (e *app) scratchLeftovers() []string {
+// terminal closed), by their record: dead are those recorded by a run whose
+// pid is gone (a reused pid only delays the cleanup), unknown those whose
+// record holds no pid, which is no proof that no run uses them. Only names
+// Scratch makes.
+func (e *app) scratchLeftovers() (dead, unknown []string) {
 	ents, _ := os.ReadDir(string(e.state))
-	var out []string
 	for _, f := range ents {
 		name, ok := strings.CutPrefix(f.Name(), state.ScratchOf)
 		if !ok || !vmname.IsScratch(name) {
 			continue
 		}
-		pid, err := strconv.Atoi(e.state.Read(filepath.Join(string(e.state), f.Name())))
-		if err == nil && pid > 0 && alive(pid) {
-			continue
+		pid, err := strconv.Atoi(strings.TrimSpace(e.state.Read(f.Name())))
+		switch {
+		case err != nil || pid <= 0:
+			unknown = append(unknown, name)
+		case !alive(pid):
+			dead = append(dead, name)
 		}
-		out = append(out, name)
 	}
-	return out
+	return dead, unknown
 }

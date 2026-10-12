@@ -96,7 +96,7 @@ export const fr: Dictionary = {
       'agent-vm, c\'est un seul binaire, Lima intégré, sans démon : chaque VM en marche est servie par un processus agent-vm à elle.',
     prerequisitesTitle: 'Prérequis',
     prerequisites: [
-      { name: 'macOS, Linux ou Windows', note: 'Windows est expérimental : pas encore essayé sur une machine Windows.', href: '' },
+      { name: 'macOS, Linux ou Windows', note: 'Windows est expérimental.', href: '' },
       {
         name: 'QEMU, sous Linux et Windows',
         note: 'macOS n\'a besoin de rien d\'autre. Sous Linux, KVM aussi : `agent-vm setup` dit ce qui manque et comment l\'installer. Sous Windows, QEMU 7.2 ou plus récent et la fonctionnalité Windows Hypervisor Platform.',
@@ -134,7 +134,7 @@ export const fr: Dictionary = {
         id: 'windows',
         label: 'Windows',
         code: '# dans Git Bash (expérimental)\nwinget install SoftwareFreedom.QEMU\ncurl -fsSL https://www.agent-vm.org/install.sh | sh',
-        note: 'Expérimental : pas encore essayé sur une machine Windows. Sans Git Bash, télécharge `agent-vm-X.Y.Z-windows-amd64.tar.gz` (ou `-arm64`) depuis les versions publiées sur GitHub, décompresse-le avec `tar -xzf`, et lance `agent-vm.exe install` dans PowerShell. Les VM ont aussi besoin de la fonctionnalité Windows Hypervisor Platform, qu\'un administrateur active une fois : voir [Windows et WSL](#windows-and-wsl).',
+        note: 'Expérimental. Sans Git Bash, télécharge `agent-vm-X.Y.Z-windows-amd64.tar.gz` (ou `-arm64`) depuis les versions publiées sur GitHub, décompresse-le avec `tar -xzf`, et lance `agent-vm.exe install` dans PowerShell. Les VM ont aussi besoin de la fonctionnalité Windows Hypervisor Platform, qu\'un administrateur active une fois : voir [Windows et WSL](#windows-and-wsl).',
       },
     ],
     steps: [
@@ -161,7 +161,7 @@ export const fr: Dictionary = {
       {
         title: 'Lancer un agent',
         body: 'Les arguments supplémentaires sont transmis tels quels à l\'agent : tout ce que sa CLI accepte fonctionne ici.',
-        code: 'agent-vm opencode                        # OpenCode\nagent-vm claude                          # Claude Code\nagent-vm codex                           # Codex CLI\nagent-vm vibe                            # Mistral Vibe\n\nagent-vm claude -p "corrige les erreurs de lint"\nagent-vm opencode run "mets à jour le changelog"',
+        code: 'agent-vm opencode                        # OpenCode\nagent-vm claude                          # Claude Code\nagent-vm codex                           # Codex CLI\nagent-vm vibe                            # Mistral Vibe\nagent-vm pi                              # Pi\n\nagent-vm claude -p "corrige les erreurs de lint"\nagent-vm opencode run "mets à jour le changelog"',
       },
       {
         title: 'Accéder au serveur de dev',
@@ -206,9 +206,6 @@ export const fr: Dictionary = {
       '# ~/.agent-vm/env\nGIT_AUTHOR_NAME=Ton Nom\nGIT_AUTHOR_EMAIL=12345+toi@users.noreply.github.com\nGIT_COMMITTER_NAME=Ton Nom\nGIT_COMMITTER_EMAIL=12345+toi@users.noreply.github.com',
     gitNote:
       'Ces variables passent avant `git config`, dans tous les dépôts de la VM : pour une identité par dépôt, règle plutôt `user.name` et `user.email` depuis un script de runtime. `gh` lit `GH_TOKEN` de lui-même, donc `gh pr create` fonctionne sans rien d\'autre. Un `git push` en HTTPS a besoin, lui, d\'un credential helper : une ligne `gh auth setup-git` dans ton [script de runtime](#customisation-files).',
-    gitHumanTitle: 'Cela dit, garde la main sur les commits',
-    gitHumanBody:
-      'Que l\'agent puisse commiter ne veut pas dire qu\'il doit le faire. Un commit signifie que tu as lu le diff : laisse l\'agent écrire le code, relis-le et commite toi-même. Avec `.git` [protégé](#git), c\'est même le seul moyen.',
   },
 
   reference: {
@@ -367,7 +364,7 @@ export const fr: Dictionary = {
           {
             title: 'Windows et WSL',
             paras: [
-              'Sous Windows, agent-vm tourne nativement, depuis PowerShell ou Git Bash, avec QEMU ; c\'est expérimental, pas encore essayé sur une machine Windows. Tes dossiers y sont `C:/Users/toi/projet`, et `/c/Users/toi/projet` dans la VM, comme avec la 0.2. Le fichier des volumes accepte `C:/x` ou `C:\\x`, et le `/c/x` de la 0.2.',
+              'Sous Windows, agent-vm tourne nativement, depuis PowerShell ou Git Bash, avec QEMU ; c\'est expérimental. Tes dossiers y sont `C:/Users/toi/projet`, et `/c/Users/toi/projet` dans la VM, comme avec la 0.2. Le fichier des volumes accepte `C:/x` ou `C:\\x`, et le `/c/x` de la 0.2.',
               'Les VM ont besoin de la fonctionnalité Windows Hypervisor Platform. Elle est désactivée par défaut et seul un administrateur peut l\'activer, une fois, dans les Fonctionnalités de Windows ou avec la commande ci-dessous, puis un redémarrage. Sur un portable géré, c\'est une demande au service informatique. Un démarrage qui échoue faute d\'elle le dit.',
               'WSL2, c\'est Linux pour agent-vm, et ses VM ont besoin de KVM, que WSL2 n\'a qu\'avec la virtualisation imbriquée transmise par l\'hôte Windows. WSL1 ne peut pas faire tourner de VM.',
             ],
@@ -527,18 +524,10 @@ export const fr: Dictionary = {
             title: 'Fichiers surveillés',
             paras: [
               'Pour le premier cas, agent-vm surveille les fichiers que ta machine exécute d\'elle-même : quand la VM en écrit, crée, renomme ou supprime un, à n\'importe quelle profondeur des partages, une fenêtre te demande d\'abord. Un oui vaut jusqu\'à l\'arrêt de la VM ; un non, une minute, après quoi une nouvelle tentative redemande. Là où aucune fenêtre ne peut s\'afficher (pas de session graphique), l\'écriture est refusée et une notification le dit ; une fenêtre restée sans réponse deux minutes la refuse aussi. `AGENT_VM_GUARDED_WRITES=deny` les refuse toutes sans demander.',
-              'Surveillés par défaut : `.envrc` (direnv), `.vscode/tasks.json`, `.vscode/settings.json` et `.vscode/launch.json` (VS Code), `.pre-commit-config.yaml` (pre-commit), `lefthook.yml` et `.lefthook.yml` (lefthook), `mise.toml` et `.mise.toml` (mise). Les fichiers que l\'agent modifie couramment, comme un `Makefile` ou un `package.json`, ne le sont pas : ajoute-les dans `~/.agent-vm/guarded`, un chemin par ligne, lu au démarrage d\'une VM. `!chemin` retire un fichier par défaut.',
+              'Surveillés par défaut : `.envrc` (direnv), `.vscode/tasks.json`, `.vscode/settings.json` et `.vscode/launch.json` (VS Code), `.pre-commit-config.yaml` (pre-commit), `lefthook.yml` et `.lefthook.yml` (lefthook), `mise.toml` et `.mise.toml` (mise). Les fichiers que l\'agent modifie couramment, comme un `Makefile` ou un `package.json`, ne le sont pas : ajoute-les dans `~/.agent-vm/guarded`, un chemin par ligne, lu au démarrage d\'une VM. `!chemin` retire un fichier par défaut, et `*.ext` surveille une extension. Sur un hôte Windows, `*.library-ms`, `*.searchConnector-ms`, `*.lnk`, `*.url`, `*.scf` et `desktop.ini` le sont aussi : l\'Explorateur envoie ton empreinte NTLM au serveur qu\'ils nomment quand il les affiche. Il n\'y a pas de fenêtre de confirmation sous Windows : les écritures de la VM sur ces fichiers sont refusées.',
             ],
             list: [],
             code: '# ~/.agent-vm/guarded\nMakefile               # demander avant que la VM change un Makefile\n.github/workflows/ci.yml\n!.vscode/settings.json # plus demandé',
-          },
-          {
-            title: 'Garder ton dépôt hors d\'atteinte',
-            paras: [
-              'Ne donne pas à agent-vm le dépôt dans lequel tu travailles. Clone le projet une seconde fois, lance agent-vm dans ce clone, et rapatrie son travail avec `git fetch` une fois le diff relu. `git fetch` n\'extrait aucun fichier : ceux de l\'agent n\'arrivent dans ton arborescence qu\'à la fusion. Cela suppose que le `.git` du clone reste en lecture seule pour la VM, ce qui est le cas sauf avec `--unsafe-writable-git` : sinon, la VM peut l\'écrire, et git le lit ensuite.',
-            ],
-            list: [],
-            code: '# une fois ; --no-local copie, sans liens en dur\ngit clone --no-local ~/work/app ~/agent/app\n# l\'agent travaille là\ncd ~/agent/app && agent-vm claude\n# de retour dans ton dépôt, une fois qu\'il a fini\ncd ~/work/app\ngit fetch ~/agent/app HEAD:agent/review\ngit diff ...agent/review   # relis tout\ngit merge agent/review',
           },
           {
             title: 'Éditeurs et agents',
@@ -579,7 +568,7 @@ export const fr: Dictionary = {
             paras: [],
             list: [
               'macOS : les fichiers écrits à travers le partage ne portent pas l\'attribut de quarantaine, donc Gatekeeper ne vérifie pas un `.app`, `.command` ou `.pkg` laissé là. Ne les ouvre pas depuis le Finder.',
-              'Windows : l\'Explorateur contacte le serveur nommé dans un `.library-ms`, `.url`, `.lnk` ou `desktop.ini` qu\'il affiche, et lui envoie ton empreinte NTLM ([CVE-2025-24054](https://research.checkpoint.com/2025/cve-2025-24054-ntlm-exploit-in-the-wild/)). Garde Windows à jour et le SMB sortant bloqué.',
+              'Windows : l\'Explorateur peut contacter le serveur nommé dans un `.library-ms`, `.searchConnector-ms`, `.lnk`, `.url`, `.scf` ou `desktop.ini` qu\'il affiche, et lui envoyer ton empreinte NTLM ([CVE-2025-24054](https://research.checkpoint.com/2025/cve-2025-24054-ntlm-exploit-in-the-wild/) pour `.library-ms`, [CVE-2025-50154](https://nvd.nist.gov/vuln/detail/CVE-2025-50154) et [CVE-2025-59214](https://nvd.nist.gov/vuln/detail/CVE-2025-59214) pour `.lnk`). Des correctifs ont déjà été contournés. agent-vm refuse sous Windows les écritures de la VM sur ces fichiers ; garde Windows à jour, le SMB sortant (TCP 445) bloqué et, si tu peux, [NTLM bloqué côté client SMB](https://learn.microsoft.com/en-us/powershell/module/smbshare/set-smbclientconfiguration).',
               'Linux : Dolphin, sous KDE, lançait des commandes depuis un `.desktop` d\'un dossier qu\'il ne faisait qu\'afficher (CVE-2019-14744, corrigée dans KDE Frameworks 5.61).',
             ],
             code: '',
@@ -720,32 +709,6 @@ export const fr: Dictionary = {
     ],
     dockerNote:
       'Docker tourne nativement dans la VM, sans Docker-in-Docker, et Chromium headless fonctionne d\'emblée. Sur un Mac, ça remplace Docker Desktop.',
-  },
-
-  roadmap: {
-    title: 'Ce qui manque.',
-    items: [
-      {
-        status: 'Construit, pas encore essayé',
-        title: 'Windows, nativement',
-        body: 'agent-vm tourne désormais sous Windows sans Git Bash, ses chemins pris en `C:/...` et vus par la VM en `/c/...`, comme avec la 0.2, et ses tests tournent sur tous les systèmes. Rien n\'a encore tourné sur une machine Windows : le setup, les partages, l\'isolation réseau, la vérification des ports. On cherche quelqu\'un pour l\'essayer, en x86_64 ou arm64, et une fenêtre de confirmation pour les fichiers surveillés.',
-      },
-      {
-        status: 'Idée',
-        title: 'Relire ce que l\'agent écrit',
-        body: 'Chaque écriture de la VM passe par le serveur SFTP d\'agent-vm. Il pourrait les garder de côté et te laisser relire le diff, puis en appliquer tout ou partie au vrai dossier. Un premier pas : la liste de chaque chemin que la VM a écrit pendant une session.',
-      },
-      {
-        status: 'Demande un M3',
-        title: 'Faire tourner une VM dans la VM',
-        body: 'Une option `--allow-nested-vm`, pour tester de l\'outillage de virtualisation depuis la VM. Lima gère la virtualisation imbriquée, mais elle est désactivée par défaut et ne peut pas être activée sans condition : sur une puce antérieure à l\'Apple M3, Lima échoue purement et simplement à démarrer la VM, et plus aucune VM ne démarrerait. L\'option devrait donc d\'abord vérifier ce que l\'hôte sait faire. Personne ici n\'a de M3 pour la tester. Elle donnerait aussi à l\'agent un accès à une interface d\'hyperviseur.',
-      },
-      {
-        status: 'Conçu, pas construit',
-        title: 'Faire tourner les VM sur une autre machine',
-        body: 'Une seule installation sur ton portable, qui pilote des VM sur une machine que tu loues. Tu refermes le portable, l\'agent continue. Questions ouvertes : désigner une VM par son nom plutôt que par le dossier courant, et décider qui se charge de supprimer un espace de travail.',
-      },
-    ],
   },
 
   contribute: {

@@ -1,10 +1,10 @@
 # Changelog
 
-## 0.3.0 (alpha)
+## 0.3.0
 
 agent-vm 0.3 is one Go binary with Lima built in (see PLAN_0.3.0.md). The
 bash version (`agent-vm.sh`, `lib/`) is gone from the repository: 0.2.x
-stays on its tags. Changes so far, against 0.2.1:
+stays on its tags. Changes against 0.2.1:
 
 ### Added
 
@@ -32,9 +32,14 @@ stays on its tags. Changes so far, against 0.2.1:
   `lefthook.yml` or `mise.toml`, a dialog asks you first (allowed until the
   VM stops; a no holds a minute). Without a dialog to show, the write is
   refused and a notification says so. `~/.agent-vm/guarded` adds paths, one
-  per line, and `!path` removes one of the defaults.
-  `AGENT_VM_GUARDED_WRITES=deny` refuses them all without asking.
-- Windows, natively (experimental, not yet tried on a Windows machine): host
+  per line, `!path` removes one of the defaults, and `*.ext` guards an
+  extension. `AGENT_VM_GUARDED_WRITES=deny` refuses them all without asking.
+- On a Windows host, `*.library-ms`, `*.searchConnector-ms`, `*.lnk`, `*.url`,
+  `*.scf` and `desktop.ini` are guarded too (names Windows makes into them,
+  like `a.lnk.` or `a.lnk:stream`, included): Explorer sends your NTLM hash to
+  the server they name when it shows them (CVE-2025-24054, CVE-2025-50154,
+  CVE-2025-59214). There is no dialog on Windows yet: the writes are refused.
+- Windows, natively (experimental): host
   paths are kept as C:/Users/me/proj, drive-aware, and the VM sees them as
   0.2 did, /c/Users/me/proj, under the same VM names. The volumes file takes
   C:/x and C:\x, and 0.2's /c/x, in its sources and project filters. QEMU's

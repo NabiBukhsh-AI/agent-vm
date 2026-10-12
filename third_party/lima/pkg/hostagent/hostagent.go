@@ -422,8 +422,8 @@ func (a *HostAgent) Run(ctx context.Context) error {
 		hosts[name] = networks.SlirpIPAddress
 		// The guest reaches this server on the host's loopback, past any
 		// usernet.Outbound policy.
-		usernet.AllowHostService(a.udpDNSLocalPort)
-		usernet.AllowHostService(a.tcpDNSLocalPort)
+		usernet.AllowHostService("udp", a.udpDNSLocalPort)
+		usernet.AllowHostService("tcp", a.tcpDNSLocalPort)
 		srvOpts := dns.ServerOptions{
 			UDPPort: a.udpDNSLocalPort,
 			TCPPort: a.tcpDNSLocalPort,

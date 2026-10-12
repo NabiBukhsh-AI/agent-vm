@@ -54,23 +54,59 @@ check "no argument prints the usage (exit 2)" "$?" "2"
 RR="$SB/repo"; RO="$SB/origin.git"; RB="$SB/bin"
 mkdir -p "$RR/www/public" "$RB"
 cp -R "$SELF_DIR/release.sh" "$SELF_DIR/agent-vm.sh" "$SELF_DIR/agent-vm.setup.sh" "$SELF_DIR/runtime.example.sh" \
-  "$SELF_DIR/LICENSE" "$SELF_DIR/README.md" "$SELF_DIR/tests" "$SELF_DIR/scripts" "$RR/"
+  "$SELF_DIR/LICENSE" "$SELF_DIR/NOTICE" "$SELF_DIR/THIRD_PARTY_LICENSES" "$SELF_DIR/README.md" \
+  "$SELF_DIR/tests" "$SELF_DIR/scripts" "$RR/"
 cp "$SELF_DIR/www/public/install.sh" "$RR/www/public/"
 printf 'NEXT_VERSION := %s\n' "$V" > "$RR/Makefile"
 printf '# Changelog\n\n## %s\n\n- notes\n' "$V" > "$RR/CHANGELOG.md"
-# gh: a release's assets are copied to $SB/assets.
+# gh: a release's assets are copied to $SB/assets. $SB/draft and
+# $SB/released say what "release list" finds. REL_CI is the state the CI
+# filter would give (the filter itself is tested below, with jq);
+# REL_CORRUPT makes the draft download return a changed tarball.
 cat > "$RB/gh" <<STUB
 #!/bin/sh
 case "\$1 \$2" in
   "auth status") exit 0 ;;
-  "run list") echo "\${REL_CI:-completed success}" ;;
-  "release view") [ -e "$SB/released" ] ;;
+  "run list") echo "\${REL_CI:-passed}" ;;
+  "release list")
+    if [ -e "$SB/released" ]; then echo published
+    elif [ -e "$SB/draft" ]; then echo draft; fi ;;
   "repo view") echo "o/r" ;;
   "release create")
     echo "\$*" > "$SB/gh-create.log"
     mkdir -p "$SB/assets"
-    for a in "\$@"; do case "\$a" in *.tar.gz|*SHA256SUMS) cp "\$a" "$SB/assets/" ;; esac; done ;;
+    for a in "\$@"; do case "\$a" in *.tar.gz|*SHA256SUMS|*.minisig) cp "\$a" "$SB/assets/" ;; esac; done
+    touch "$SB/draft" ;;
+  "release download")
+    dir=""
+    while [ \$# -gt 0 ]; do [ "\$1" != --dir ] || dir="\$2"; shift; done
+    cp "$SB"/assets/* "\$dir/"
+    if [ -n "\${REL_CORRUPT:-}" ]; then
+      for t in "\$dir"/agent-vm-*-linux-arm64.tar.gz; do echo junk >> "\$t"; done
+    fi ;;
+  "release edit") echo "\$*" > "$SB/gh-edit.log"; rm -f "$SB/draft"; touch "$SB/released" ;;
+  "release delete") echo "\$*" >> "$SB/gh-delete.log"; rm -f "$SB/draft" ;;
 esac
+STUB
+# curl: what the smoke test downloads is served from $SB/assets, and only
+# when asked for as the installer asks (HTTPS only, TLS 1.2 or later, errors
+# fail). REL_SMOKE_CORRUPT changes a tarball.
+cat > "$RB/curl" <<STUB
+#!/bin/sh
+flags="\$*"
+for want in "--proto =https" "--tlsv1.2" "-fsSL"; do
+  case "\$flags" in *"\$want"*) ;; *) echo "curl stub: no \$want in \$flags" >&2; exit 2 ;; esac
+done
+out=""; url=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in -o) out="\$2"; shift ;; https://*) url="\$1" ;; esac
+  shift
+done
+echo "\$url" >> "$SB/curl.log"
+f="$SB/assets/\${url##*/}"
+[ -f "\$f" ] || exit 22
+cp "\$f" "\$out"
+[ -z "\${REL_SMOKE_CORRUPT:-}" ] || case "\$f" in *linux-arm64.tar.gz) echo junk >> "\$out" ;; esac
 STUB
 # What signs the Windows binaries, when there is: a real executable for
 # them (osslsigncode signs only one), and a self-signed certificate.
@@ -91,14 +127,16 @@ cat > "$RB/make" <<STUB
 echo "make \$*" >> "$SB/make.log"
 case "\$*" in
   *" agent-vm "*)
-    for a in "\$@"; do case "\$a" in GOOS=*) os="\${a#GOOS=}" ;; GOARCH=*) arch="\${a#GOARCH=}" ;; esac; done
+    for a in "\$@"; do case "\$a" in GOOS=*) os="\${a#GOOS=}" ;; GOARCH=*) arch="\${a#GOARCH=}" ;; VERSION=*) ver="\${a#VERSION=}" ;; esac; done
     mkdir -p "\$2/_output/bin"
-    if [ "\$os" != windows ]; then echo "\$os-\$arch" > "\$2/_output/bin/agent-vm"
+    if [ "\$os" != windows ]; then
+      printf '#!/bin/sh\n# %s-%s\necho %s\n' "\$os" "\$arch" "\$ver" > "\$2/_output/bin/agent-vm"
+      chmod +x "\$2/_output/bin/agent-vm"
     elif [ -n "$SIGN" ]; then cp "$SB/hello.exe" "\$2/_output/bin/agent-vm.exe"
     else echo "\$os-\$arch" > "\$2/_output/bin/agent-vm.exe"; fi ;;
 esac
 STUB
-chmod +x "$RB/gh" "$RB/make"
+chmod +x "$RB/gh" "$RB/make" "$RB/curl"
 ( cd "$RR" && git init -q -b main && git add -A && git commit -qm r \
     && git init -q --bare "$RO" && git remote add origin "$RO" && git push -q origin main ) >/dev/null 2>&1
 
@@ -139,13 +177,31 @@ case "$rc:$out" in
 esac
 
 # A failed workflow stops the run; --bypass-checks goes on, saying so.
-out="$(REL_CI="completed failure" relrun)"; rc=$?
-case "$rc:$out" in 1:*"did not pass"*) pass "a failed CI workflow stops it" ;; *) fail "failed workflow: $out" ;; esac
-out="$(REL_CI="completed failure" relrun --bypass-checks)"; rc=$?
+out="$(REL_CI=failed relrun)"; rc=$?
+case "$rc:$out" in 1:*"CI workflow failed"*) pass "a failed CI workflow stops it" ;; *) fail "failed workflow: $out" ;; esac
+out="$(REL_CI=running relrun)"; rc=$?
+case "$rc:$out" in 1:*"still running"*) pass "a running CI workflow stops it" ;; *) fail "running workflow: $out" ;; esac
+out="$(REL_CI=none relrun)"; rc=$?
+case "$rc:$out" in 1:*"no passing CI workflow run"*) pass "no CI run stops it" ;; *) fail "no workflow: $out" ;; esac
+out="$(REL_CI=failed relrun --bypass-checks)"; rc=$?
 case "$rc:$out" in
   0:*"not checked (--bypass-checks)"*"dry run complete"*) pass "--bypass-checks: the workflow is skipped, with a warning" ;;
   *) fail "--bypass-checks: $out" ;;
 esac
+
+# The jq filter that reads gh's run list (gh runs it itself; jq here): no run,
+# one going, one failed (whatever else passed), one passed, only cancelled.
+if command -v jq >/dev/null 2>&1; then
+  ci_jq="$(awk "/^CI_JQ='/ { p = 1; sub(/^CI_JQ='/, \"\") } p { if (\$0 ~ /^'\$/) exit; print }" "$SELF_DIR/release.sh")"
+  ci_state() { printf '%s' "$1" | jq -r "$ci_jq"; }
+  check "ci filter: no run" "$(ci_state '[]')" "none"
+  check "ci filter: one running" "$(ci_state '[{"status":"in_progress","conclusion":""},{"status":"completed","conclusion":"success"}]')" "running"
+  check "ci filter: one failed, another passed" "$(ci_state '[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"failure"}]')" "failed"
+  check "ci filter: passed, a cancelled run ignored" "$(ci_state '[{"status":"completed","conclusion":"cancelled"},{"status":"completed","conclusion":"success"}]')" "passed"
+  check "ci filter: only a cancelled run" "$(ci_state '[{"status":"completed","conclusion":"cancelled"}]')" "none"
+else
+  printf '  skip the CI filter (no jq)\n'
+fi
 
 # A run that pushed the tag and then failed to publish is picked up again,
 # rather than stuck on "tag already exists".
@@ -194,7 +250,7 @@ EOF
 # --not-latest: GitHub keeps its latest release, and brew its formula.
 out="$(AGENT_VM_TAP="$SB/tap" relrun --not-latest)"; rc=$?
 case "$rc:$out" in
-  0:*'$ gh release create v'$V' --verify-tag --title agent-vm '$V' --latest=false'*"not updated (--not-latest)"*"dry run complete"*)
+  0:*'$ gh release edit v'$V' --draft=false --latest=false'*"not updated (--not-latest)"*"dry run complete"*)
     pass "--not-latest: not the latest release, the formula left alone" ;;
   *) fail "--not-latest: $out" ;;
 esac
@@ -205,7 +261,8 @@ sign_env=()
 out="$( cd "$RR" && env ${sign_env[@]+"${sign_env[@]}"} AGENT_VM_TAP="$SB/tap" AGENT_VM_RELEASE_TEST_NO_MACOS=1 PATH="$RB:$PATH" bash ./release.sh "$V" --yes 2>&1 )"; rc=$?
 case "$rc:$out" in 0:*"agent-vm $V is released"*) pass "real run: released" ;; *) fail "real run: $out" ;; esac
 check "real run: the tag is on origin" "$(git -C "$RO" tag)" "v$V"
-check "real run: the latest release (no --latest=false)" "$(grep -c -- '--latest=false' "$SB/gh-create.log")" "0"
+check "real run: the latest release (no --latest=false)" "$(grep -c -- '--latest=false' "$SB/gh-edit.log")" "0"
+check "real run: published as the latest release" "$(grep -c -- '--draft=false --latest$' "$SB/gh-edit.log")" "1"
 # Byte order (LC_ALL=C): macOS sorts these differently in its locale.
 check "real run: one tarball per platform, and their sums" "$(LC_ALL=C ls "$SB/assets" | tr '\n' ' ')" \
   "SHA256SUMS agent-vm-$V-linux-amd64.tar.gz agent-vm-$V-linux-arm64.tar.gz agent-vm-$V-windows-amd64.tar.gz agent-vm-$V-windows-arm64.tar.gz "
@@ -228,7 +285,9 @@ done < "$SB/assets/SHA256SUMS"
 check "real run: SHA256SUMS matches the tarballs" "$sums_ok" "1"
 check "real run: each tarball has its platform's binary, agent-vm.sh and the docs" \
   "$(tar -tzf "$SB/assets/agent-vm-$V-linux-arm64.tar.gz" | LC_ALL=C sort | tr '\n' ' ')$(tar -xzOf "$SB/assets/agent-vm-$V-linux-arm64.tar.gz" "agent-vm-$V/agent-vm")" \
-  "agent-vm-$V/ agent-vm-$V/CHANGELOG.md agent-vm-$V/LICENSE agent-vm-$V/README.md agent-vm-$V/agent-vm agent-vm-$V/agent-vm.sh agent-vm-$V/runtime.example.sh linux-arm64"
+  "agent-vm-$V/ agent-vm-$V/CHANGELOG.md agent-vm-$V/LICENSE agent-vm-$V/NOTICE agent-vm-$V/README.md agent-vm-$V/THIRD_PARTY_LICENSES agent-vm-$V/agent-vm agent-vm-$V/agent-vm.sh agent-vm-$V/runtime.example.sh #!/bin/sh
+# linux-arm64
+echo $V"
 arm="$(awk '$2 ~ /linux-arm64/ { print $1 }' "$SB/assets/SHA256SUMS")"
 intel="$(awk '$2 ~ /linux-amd64/ { print $1 }' "$SB/assets/SHA256SUMS")"
 check "real run: the formula's urls and checksums, per platform; the bottle's left" \

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/lima-vm/lima/v2/pkg/guestagent/api"
@@ -221,12 +222,22 @@ func TestLimaEphemeralPorts(t *testing.T) {
 	if err := l.Create(ctx, "p-12345678", "template:debian-13", Settings{Mounts: &plain, MountType: &rev}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	// A forward of the VM's own, which Start keeps.
+	yamlPath := filepath.Join(os.Getenv("LIMA_HOME"), "p-12345678", "lima.yaml")
+	orig, _ := os.ReadFile(yamlPath)
+	custom := "\nportForwards:\n- guestPort: 40000\n  hostPort: 40001\n"
+	if err := os.WriteFile(yamlPath, append(orig, custom...), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := l.Start(ctx, "p-12345678", io.Discard); !errors.Is(err, ErrUnconfined) {
 		t.Fatalf("start: %v", err)
 	}
 	inst, err := l.inspect(ctx, "p-12345678")
 	if err != nil || inst.Config == nil {
 		t.Fatalf("inspect: %v %v", err, inst.Errors)
+	}
+	if n := len(inst.Config.PortForwards); n != 2 || inst.Config.PortForwards[0].GuestPort != 40000 {
+		t.Errorf("port forwards: %+v", inst.Config.PortForwards)
 	}
 	def := limatype.PortForward{}
 	limayaml.FillPortForwardDefaults(&def, inst.Dir, inst.Config.User, inst.Param)
@@ -295,6 +306,72 @@ func TestConfined(t *testing.T) {
 	} {
 		if err := Confined(c.inst); (err == nil) != c.ok || err != nil && !errors.Is(err, ErrUnconfined) {
 			t.Errorf("%+v: %v", c.inst, err)
+		}
+	}
+}
+
+// The user's own LIMA_HOME is what NewLima found, not the one it sets.
+func TestUserLimaHome(t *testing.T) {
+	oldSet, oldUser := limaHomeSet, userLimaHome
+	t.Cleanup(func() { limaHomeSet, userLimaHome = oldSet, oldUser })
+	limaHomeSet, userLimaHome = "", ""
+	user := t.TempDir()
+	t.Setenv("LIMA_HOME", user)
+	if got := UserLimaHome(); got != user {
+		t.Errorf("before NewLima: %q", got)
+	}
+	ours := t.TempDir()
+	if _, err := NewLima(ours, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if got := UserLimaHome(); got != user {
+		t.Errorf("after NewLima: %q, want %q", got, user)
+	}
+	// A second one, as tests and migrations make, keeps it.
+	if _, err := NewLima(ours, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if got := UserLimaHome(); got != user {
+		t.Errorf("after two: %q, want %q", got, user)
+	}
+
+	limaHomeSet, userLimaHome = "", ""
+	os.Unsetenv("LIMA_HOME")
+	if _, err := NewLima(ours, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if got := UserLimaHome(); got != "" {
+		t.Errorf("unset: %q", got)
+	}
+}
+
+// Edits at once each write a whole lima.yaml, and leave nothing behind.
+func TestLimaEditConcurrent(t *testing.T) {
+	ctx := context.Background()
+	l := newTestLima(t)
+	none := []Mount{}
+	if err := l.Create(ctx, "p-12345678", "template:debian-13", Settings{Mounts: &none}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 1; i <= 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := l.Edit(ctx, "p-12345678", Settings{CPUs: i}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	p, err := l.Get(ctx, "p-12345678")
+	if err != nil || p.Status == Broken {
+		t.Fatalf("after: %v %+v", err, p)
+	}
+	ents, _ := os.ReadDir(p.Dir)
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("left behind: %s", e.Name())
 		}
 	}
 }

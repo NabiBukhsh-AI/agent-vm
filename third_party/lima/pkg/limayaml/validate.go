@@ -680,7 +680,32 @@ func validateReadonlyNames(y *limatype.LimaYAML) error {
 			}
 		}
 	}
+	// A writable mount of a folder holding another writable mount reaches
+	// its files too: it has to protect the same names.
+	for i, outer := range y.Mounts {
+		for j, inner := range y.Mounts {
+			if i == j || outer.Writable == nil || !*outer.Writable || inner.Writable == nil || !*inner.Writable ||
+				!isWithin(outer.Location, inner.Location) {
+				continue
+			}
+			for _, name := range inner.SSHFS.ReadonlyNames {
+				if !slices.Contains(outer.SSHFS.ReadonlyNames, name) {
+					errs = errors.Join(errs, fmt.Errorf("field `mounts[%d].sshfs.readonlyNames` must contain %#q, as the writable mount `mounts[%d]` inside it does", i, name, j))
+				}
+			}
+		}
+	}
 	return errs
+}
+
+// isWithin reports whether the folder child is parent or under it. Case is
+// ignored where the file systems usually do.
+func isWithin(parent, child string) bool {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		parent, child = strings.ToLower(parent), strings.ToLower(child)
+	}
+	rel, err := filepath.Rel(parent, child)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func validatePort(field string, port int) error {

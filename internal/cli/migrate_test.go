@@ -38,16 +38,17 @@ func TestOwnLimaHome(t *testing.T) {
 	}
 }
 
-// doctor and info only look: they never move 0.2's VMs, which stops running
-// ones (an editor calls info unasked); a command that uses VMs does.
+// doctor, info and list only look: they never move 0.2's VMs, which stops
+// running ones (an editor calls info unasked); a command that changes VMs
+// does.
 func TestMigrateNotFromReaders(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	for _, args := range [][]string{{"doctor"}, {"info"}, {"list"}} {
+	for _, args := range [][]string{{"doctor"}, {"info"}, {"list"}, {"stop", "x"}} {
 		te := newTestEnv(t, vmtest.New())
 		moved := false
 		te.migrate = func() { moved = true }
 		te.run(args...)
-		if want := args[0] == "list"; moved != want {
+		if want := args[0] == "stop"; moved != want {
 			t.Errorf("%s: moved %v", args[0], moved)
 		}
 	}
@@ -97,7 +98,7 @@ func TestMigrateOld(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(now, "p-12345678", "lima.yaml")); err != nil {
 		t.Error("not moved")
 	}
-	if te.state.Read(te.state.Marker(state.BuiltByOf, "p-12345678")) != "0.2.1" {
+	if te.state.ReadMarker(state.BuiltByOf, "p-12345678") != "0.2.1" {
 		t.Error("its markers did not follow")
 	}
 	if _, err := os.Stat(filepath.Join(old, "theirs", "lima.yaml")); err != nil {

@@ -602,9 +602,7 @@ func TestRootedNoopRemoval(t *testing.T) {
 
 	// An expired token.
 	h.expectRemove(p(".git/config"))
-	h.mu.Lock()
-	h.noopRemovals[slashPath(p(".git/config"))] = time.Now().Add(-time.Second)
-	h.mu.Unlock()
+	h.now = func() time.Time { return time.Now().Add(noopRemovalTTL + time.Second) }
 	if err := c.Remove(p(".git/config")); err == nil {
 		t.Fatal("expected an error")
 	}

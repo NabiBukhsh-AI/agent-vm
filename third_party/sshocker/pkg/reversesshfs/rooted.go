@@ -8,13 +8,13 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/pkg/sftp"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
 )
 
 // rootedHandlers serves only the files under rootPath.
@@ -30,17 +30,17 @@ type rootedHandlers struct {
 	root          *os.Root
 	readonly      bool
 	readonlyNames []string
+	foldedNames   []string // readonlyNames as FoldName gives them
+	guardRoot     string   // the served directory as Guard is told
 	rootedSys
 
-	mu           sync.Mutex
-	noopRemovals map[string]time.Time // expiry, keyed by request path
+	mu    sync.Mutex // protects relay
+	relay *relay
+	now   func() time.Time
 }
 
 // maxHandles bounds the files and directories a client keeps open.
 const maxHandles = 4096
-
-// noopRemovalTTL bounds how long an ExpectRemove token waits for the guest.
-const noopRemovalTTL = 5 * time.Second
 
 func newRootedServer(rwc io.ReadWriteCloser, localPath string, readonly bool, readonlyNames []string) (*sftp.RequestServer, *rootedHandlers, error) {
 	root, err := os.OpenRoot(localPath)
@@ -57,8 +57,13 @@ func newRootedServer(rwc io.ReadWriteCloser, localPath string, readonly bool, re
 		root:          root,
 		readonly:      readonly,
 		readonlyNames: readonlyNames,
+		guardRoot:     filepath.Clean(localPath),
 		rootedSys:     sys,
-		noopRemovals:  make(map[string]time.Time),
+		relay:         newRelay(),
+		now:           time.Now,
+	}
+	for _, n := range readonlyNames {
+		h.foldedNames = append(h.foldedNames, FoldName(n))
 	}
 	handlers := sftp.Handlers{FileGet: h, FilePut: h, FileCmd: h, FileList: h}
 	// Sequential, as OpenSSH's sftp-server: otherwise two writes to the same range, or a write
@@ -73,33 +78,6 @@ func newRootedServer(rwc io.ReadWriteCloser, localPath string, readonly bool, re
 
 func (h *rootedHandlers) Close() error {
 	return errors.Join(h.root.Close(), h.rootedSys.close())
-}
-
-// expectRemove makes the next Remove or Rmdir request for p, within noopRemovalTTL,
-// succeed without touching the host. p is a host path under the root.
-func (h *rootedHandlers) expectRemove(p string) {
-	p = slashPath(p)
-	now := time.Now()
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for k, expiry := range h.noopRemovals {
-		if now.After(expiry) {
-			delete(h.noopRemovals, k)
-		}
-	}
-	h.noopRemovals[p] = now.Add(noopRemovalTTL)
-}
-
-func (h *rootedHandlers) consumeNoopRemoval(p string) bool {
-	p = path.Clean(p)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	expiry, ok := h.noopRemovals[p]
-	if !ok {
-		return false
-	}
-	delete(h.noopRemovals, p)
-	return time.Now().Before(expiry)
 }
 
 // rel maps a request path to a path relative to the root.
@@ -122,7 +100,9 @@ func (h *rootedHandlers) rel(p string) (string, error) {
 	return "", errDenied
 }
 
-func (h *rootedHandlers) writableRel(p string) (string, error) {
+// writableRel is the path relative to the root of the request path p, if it may be written.
+// entry: see Guard.
+func (h *rootedHandlers) writableRel(p string, entry bool) (string, error) {
 	if h.readonly {
 		return "", errDenied
 	}
@@ -133,8 +113,10 @@ func (h *rootedHandlers) writableRel(p string) (string, error) {
 	if h.isReadonlyName(r) || !writableName(r) {
 		return "", errDenied
 	}
-	if Guard != nil && !Guard(h.rootPath, r) {
-		return "", errDenied
+	if lexicalGuard {
+		if err := h.guard(r, entry); err != nil {
+			return "", err
+		}
 	}
 	return r, nil
 }
@@ -143,38 +125,36 @@ func (h *rootedHandlers) writableRel(p string) (string, error) {
 // write that the read-only names allow, with the served directory and the
 // path relative to it: false refuses the write (EACCES). It may block, to ask
 // the user; the client's requests wait meanwhile.
-var Guard func(root, rel string) bool
+//
+// entry is true when rel is a name being created, removed, moved or linked, as opposed to
+// a file whose content or attributes change: then a directory that holds protected paths
+// matters as well, since creating or moving it creates or moves them.
+//
+// rel is spelled as the file system has it where the server can tell (Windows: the
+// normalized name, in which 8.3 short names are replaced by long ones), otherwise as the client sent it.
+var Guard func(root, rel string, entry bool) bool
+
+func (h *rootedHandlers) guard(rel string, entry bool) error {
+	if Guard != nil && !Guard(h.guardRoot, rel, entry) {
+		return errDenied
+	}
+	return nil
+}
 
 func (h *rootedHandlers) isReadonlyName(rel string) bool {
 	for _, c := range strings.Split(rel, "/") {
-		for _, name := range h.readonlyNames {
-			if sameName(c, name) {
-				return true
-			}
+		fc := FoldName(c)
+		if slices.Contains(h.foldedNames, fc) {
+			return true
 		}
 	}
 	return false
 }
 
 // sameName reports whether a file name may refer to the same entry as name
-// on a case-insensitive (APFS, HFS+, NTFS) file system.
+// on a case-insensitive (APFS, HFS+, NTFS, casefold ext4) file system.
 func sameName(s, name string) bool {
-	return foldName(s) == foldName(name)
-}
-
-// foldName is s as such a file system compares it, or wider: without the
-// code points HFS+ ignores (those of next_hfs_char() in git's utf8.c), in
-// canonical decomposition (APFS and HFS+ ignore normalization), and fully
-// case-folded (APFS folds "ß" as "ss").
-func foldName(s string) string {
-	s = strings.Map(func(r rune) rune {
-		switch {
-		case r >= 0x200c && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x206a && r <= 0x206f, r == 0xfeff:
-			return -1
-		}
-		return r
-	}, s)
-	return norm.NFD.String(cases.Fold().String(norm.NFD.String(s)))
+	return FoldName(s) == FoldName(name)
 }
 
 // Fileread implements sftp.FileReader.
@@ -228,6 +208,9 @@ func (f writableFile) WriteAt(b []byte, off int64) (int, error) {
 }
 
 func (h *rootedHandlers) openWritable(r *sftp.Request) (writableFile, error) {
+	if r.Pflags().Creat {
+		h.creating(r.Filepath)
+	}
 	f, err := h.openFile(r)
 	if err != nil {
 		return writableFile{}, err
@@ -253,6 +236,10 @@ func (h *rootedHandlers) OpenFile(r *sftp.Request) (sftp.WriterAtReaderAt, error
 	return f, nil
 }
 
+// permMask is the part of a mode the client may set: never setuid, setgid or sticky, which
+// would give a file the host runs the privileges of its owner.
+const permMask = 0o777
+
 // openMode returns the permissions sent with an Open request.
 // For Open, pkg/sftp puts the open flags in r.Flags and drops the attribute flags,
 // so r.AttrFlags and r.Attributes must not be used: SSH_FXF_APPEND reads as permissions.
@@ -261,7 +248,7 @@ func openMode(r *sftp.Request) (uint32, bool) {
 	if len(r.Attrs) != 4 {
 		return 0, false
 	}
-	return binary.BigEndian.Uint32(r.Attrs) & 0o7777, true
+	return binary.BigEndian.Uint32(r.Attrs) & permMask, true
 }
 
 // Filecmd implements sftp.FileCmder.
@@ -281,8 +268,9 @@ func (h *rootedHandlers) Filecmd(r *sftp.Request) error {
 		}
 		return h.setstat(r)
 	case "Rename":
-		return h.rename(r, true)
+		return h.renaming(r, true)
 	case "Link":
+		h.creating(r.Target)
 		return h.link(r)
 	case "Remove", "Rmdir":
 		// The guest agent removes a path deleted on the host, so that the guest emits IN_DELETE.
@@ -290,10 +278,13 @@ func (h *rootedHandlers) Filecmd(r *sftp.Request) error {
 		if h.consumeNoopRemoval(r.Filepath) {
 			return nil
 		}
-		return h.remove(r)
+		h.removing(r.Filepath)
+		return h.removalFailed(r.Filepath, h.remove(r))
 	case "Mkdir":
+		h.creating(r.Filepath)
 		return h.mkdir(r)
 	case "Symlink":
+		h.creating(r.Target)
 		return h.symlink(r)
 	}
 	return sftp.ErrSSHFxOpUnsupported
@@ -301,7 +292,13 @@ func (h *rootedHandlers) Filecmd(r *sftp.Request) error {
 
 // PosixRename implements sftp.PosixRenameFileCmder.
 func (h *rootedHandlers) PosixRename(r *sftp.Request) error {
-	return h.rename(r, false)
+	return h.renaming(r, false)
+}
+
+func (h *rootedHandlers) renaming(r *sftp.Request, noReplace bool) error {
+	h.removing(r.Filepath)
+	h.creating(r.Target)
+	return h.removalFailed(r.Filepath, h.rename(r, noReplace))
 }
 
 // isOpenAt reports whether f is the file at p, a request path, without following a symlink at p.
@@ -410,6 +407,10 @@ func (h *rootedHandlers) RealPath(p string) (string, error) {
 // dirLister reads a directory as the client lists it, instead of all of it when it is opened:
 // a huge directory takes neither the memory nor the time of a full read up front.
 // pkg/sftp lists sequentially from offset 0, and closes it with the handle.
+//
+// Readdir looks the entries up relative to the open directory f (Go 1.26.9 and later: before,
+// by the path f was opened with, which the client could have made a symlink to a folder
+// outside the root), so the entries are those of f whatever it was renamed to.
 type dirLister struct {
 	mu   sync.Mutex
 	f    *os.File

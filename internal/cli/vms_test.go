@@ -116,7 +116,7 @@ func TestStopRm(t *testing.T) {
 	if te.run("stop", "does-not-exist") != 1 || !strings.Contains(te.out(), "no such VM: does-not-exist") || te.fake.CallLog() != "" {
 		t.Errorf("stop unknown: %s", te.out())
 	}
-	if te.run("stop", "a-00000000", "b-00000000") != 1 || !strings.Contains(te.out(), "Usage: agent-vm stop [vm-name]") {
+	if te.run("stop", "a-00000000", "b-00000000") != exitUsage || !strings.Contains(te.out(), "Usage: agent-vm stop [vm-name]") {
 		t.Errorf("stop two: %s", te.out())
 	}
 
@@ -135,7 +135,7 @@ func TestStopRm(t *testing.T) {
 
 func TestDestroyAll(t *testing.T) {
 	te := newTestEnv(t, vmtest.New(running("a-00000000"), running("base")))
-	if te.run("destroy-all") != 0 || !strings.HasSuffix(te.out(), "Aborted.\n") || te.fake.CallLog() != "" {
+	if te.run("destroy-all") != 1 || !strings.Contains(te.out(), "no terminal to ask on. Nothing was destroyed.") || te.fake.CallLog() != "" {
 		t.Errorf("no terminal: %s %s", te.out(), te.fake.CallLog())
 	}
 	if !strings.Contains(te.out(), "(base is the base template: 'agent-vm setup' rebuilds it.)") {

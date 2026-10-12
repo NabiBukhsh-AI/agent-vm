@@ -112,7 +112,7 @@ func TestStartNewVM(t *testing.T) {
 	}
 	v := se.fake.VMs[name]
 	if v.Status != vm.Running || v.MountType != vm.ReverseSSHFS || len(v.Mounts) != 1 || !v.Mounts[0].Writable ||
-		v.Mounts[0].SSHFS == nil || strings.Join(v.Mounts[0].SSHFS.ReadonlyNames, ",") != ".git,.hg" || v.Mounts[0].SSHFS.Cache == nil || *v.Mounts[0].SSHFS.Cache {
+		v.Mounts[0].SSHFS == nil || strings.Join(v.Mounts[0].SSHFS.ReadonlyNames, ",") != ".git,.hg,.sl,.jj" || v.Mounts[0].SSHFS.Cache == nil || *v.Mounts[0].SSHFS.Cache {
 		t.Errorf("VM: %+v %+v", v, v.Mounts)
 	}
 	if len(se.g.payloads) != 1 || se.g.payloads[0] != "TOKEN='x'\n" {
@@ -380,7 +380,7 @@ func TestShareVerdicts(t *testing.T) {
 		{inst(rs, vm.Mount{Location: "/p", SSHFS: b(".git", ".hg", "tools")}), []string{".git", ".hg"}, "", ""},
 		{inst(rs, vm.Mount{Location: "/p", SSHFS: b(".git")}), []string{".git", "tools"}, "lacks the read-only names", ""},
 		{inst(rs, vm.Mount{Location: "/p", SSHFS: b()}), nil, "lacks the read-only names", ""},
-		{inst(rs, vm.Mount{Location: "/p", Writable: true, SSHFS: b(".git", ".hg")}), nil, "", "a writable share of /p"},
+		{inst(rs, vm.Mount{Location: "/p", Writable: true, SSHFS: b(".git", ".hg", ".sl", ".jj")}), nil, "", "a writable share of /p"},
 		{inst(rs, vm.Mount{Location: "/p", SSHFS: b("tools")}), nil, "lacks the read-only names", ""},
 		{inst(rs, vm.Mount{Location: "/p", SSHFS: &vm.SSHFS{ReadonlyNames: []string{".git"}}}), nil, "not served by the builtin SFTP server", "not served by the builtin SFTP server"},
 		{inst("9p", vm.Mount{Location: "/p", SSHFS: b(".git")}), nil, "the mount type", "the mount type"},
@@ -431,7 +431,7 @@ func TestStartHooksCases(t *testing.T) {
 
 	// A plain name, no terminal: protected (yes by default), started.
 	git("config", "core.hooksPath", "tools/hooks")
-	if se.run("run", "true") != 0 || names() != ".git,.hg,tools" {
+	if se.run("run", "true") != 0 || names() != ".git,.hg,.sl,.jj,tools" {
 		t.Errorf("plain name, no terminal: %s", se.out())
 	}
 	// A name the shares cannot carry: aborted without a terminal, nothing
@@ -449,7 +449,7 @@ func TestStartHooksCases(t *testing.T) {
 	git("config", "core.hooksPath", "tools/hooks")
 	git("config", "core.fsmonitor", "./mon.sh")
 	se.fake.VMs[name].Status = vm.Stopped
-	if se.run("--readonly", "run", "true") != 0 || strings.Contains(se.out(), "Warning: git on this machine uses these") || names() != ".git,.hg,tools" {
+	if se.run("--readonly", "run", "true") != 0 || strings.Contains(se.out(), "Warning: git on this machine uses these") || names() != ".git,.hg,.sl,.jj,tools" {
 		t.Errorf("--readonly: %s %s", se.out(), names())
 	}
 	// A config risk alone: aborted without a terminal, nothing touched.
@@ -511,10 +511,10 @@ func TestStartHooksQuestions(t *testing.T) {
 	se.fake.VMs[vmname.Name(se.proj)].Status = vm.Stopped
 	se3 := &startEnv{testEnv: newTestEnv(t, se.fake, "y\n"), g: se.g, home: se.home, proj: se.proj}
 	se3.state = se.state
-	if se3.run("run", "true") != 0 || strings.Join(se.fake.VMs[vmname.Name(se.proj)].Mounts[0].SSHFS.ReadonlyNames, ",") != ".git,.hg,tools" {
+	if se3.run("run", "true") != 0 || strings.Join(se.fake.VMs[vmname.Name(se.proj)].Mounts[0].SSHFS.ReadonlyNames, ",") != ".git,.hg,.sl,.jj,tools" {
 		t.Errorf("tools: %s %+v", se3.out(), se.fake.VMs[vmname.Name(se.proj)].Mounts)
 	}
-	if !strings.Contains(se3.out(), "Making .git, .hg, tools read-only for VM") || !strings.Contains(se3.out(), "every 'tools' in the project is read-only") {
+	if !strings.Contains(se3.out(), "Making .git, .hg, .sl, .jj, tools read-only for VM") || !strings.Contains(se3.out(), "every 'tools' in the project is read-only") {
 		t.Errorf("not said: %s", se3.out())
 	}
 	// Declined: what is under tools is a risk again, said with the hooks.
@@ -586,7 +586,8 @@ func TestStartBareRepo(t *testing.T) {
 	unset()
 	os.Remove(filepath.Join(se.home, ".gitconfig"))
 	os.MkdirAll(filepath.Join(se.home, ".gitconfig"), 0o755)
-	if s := asked("y\n", "n\n"); s.run("run", "true") != 1 || !strings.Contains(s.out(), "Warning: the setting did not take.") {
+	// A .gitconfig git cannot read is a risk of its own, asked first.
+	if s := asked("y\n", "y\n", "n\n"); s.run("run", "true") != 1 || !strings.Contains(s.out(), "Warning: the setting did not take.") {
 		t.Errorf("did not take: %s", s.out())
 	}
 }
@@ -612,12 +613,12 @@ func TestStartOlderNames(t *testing.T) {
 	exec.Command("git", "-C", se.proj, "init", "-q").Run()
 	exec.Command("git", "-C", se.proj, "config", "core.hooksPath", ".husky/_").Run()
 	// Running, no terminal: a risk to accept, refused by default.
-	if se.run("run", "true") != 1 || !strings.Contains(se.out(), "runs with an older list of read-only names (it needs .git, .hg, .husky)") {
+	if se.run("run", "true") != 1 || !strings.Contains(se.out(), "runs with an older list of read-only names (it needs .git, .hg, .sl, .jj, .husky)") {
 		t.Errorf("older names: %s", se.out())
 	}
 	se2 := &startEnv{testEnv: newTestEnv(t, se.fake, "y\n"), g: se.g, home: se.home, proj: se.proj}
 	se2.state = se.state
-	if se2.run("run", "true") != 0 || strings.Join(se.fake.VMs[vmname.Name(se.proj)].Mounts[0].SSHFS.ReadonlyNames, ",") != ".git,.hg,.husky" {
+	if se2.run("run", "true") != 0 || strings.Join(se.fake.VMs[vmname.Name(se.proj)].Mounts[0].SSHFS.ReadonlyNames, ",") != ".git,.hg,.sl,.jj,.husky" {
 		t.Errorf("restarted: %s %s", se2.out(), se.fake.CallLog())
 	}
 }

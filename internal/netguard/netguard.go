@@ -120,21 +120,72 @@ func parseAllow(s string) ([]Rule, error) {
 	return []Rule{{Net: netip.PrefixFrom(a, a.BitLen()), Port: port}}, nil
 }
 
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
-
-// internal reports whether a is of this machine or its local networks.
-func internal(a netip.Addr) bool {
-	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
-		a.IsInterfaceLocalMulticast() || a.IsMulticast() || a.IsUnspecified() || cgnat.Contains(a) ||
-		a.Is4() && (a.As4()[0] == 0 || a == netip.AddrFrom4([4]byte{255, 255, 255, 255}))
+// reserved are the ranges the standard library does not call private, that
+// never lead to the internet: carrier-grade NAT (VPNs like Tailscale), IETF
+// protocol assignments, documentation, benchmarking (proxies use it for fake
+// addresses), and the reserved class E with the broadcast address.
+var reserved = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/96"),          // IPv4-compatible, deprecated
+	netip.MustParsePrefix("100::/64"),       // discard
+	netip.MustParsePrefix("2001:db8::/32"),  // documentation
+	netip.MustParsePrefix("fec0::/10"),      // site-local, deprecated
+	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use NAT64
 }
 
-// Allows reports whether the guest may reach dst over network.
+var (
+	nat64     = netip.MustParsePrefix("64:ff9b::/96")
+	sixToFour = netip.MustParsePrefix("2002::/16")
+	teredo    = netip.MustParsePrefix("2001::/32")
+)
+
+// internal reports whether a is of this machine or its local networks, or
+// not routed: an IPv6 address that embeds such an IPv4 one (NAT64, 6to4,
+// Teredo) is too, as a router of the host's network may translate it.
+func internal(a netip.Addr) bool {
+	a = a.Unmap().WithZone("")
+	if a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
+		a.IsInterfaceLocalMulticast() || a.IsMulticast() || a.IsUnspecified() {
+		return true
+	}
+	for _, r := range reserved {
+		if r.Contains(a) {
+			return true
+		}
+	}
+	b := a.As16()
+	switch {
+	case a.Is4():
+		return false
+	case nat64.Contains(a):
+		return internal(netip.AddrFrom4([4]byte(b[12:])))
+	case sixToFour.Contains(a):
+		return internal(netip.AddrFrom4([4]byte(b[2:6])))
+	case teredo.Contains(a):
+		// The server's address, and the client's with its bits flipped.
+		client := [4]byte{^b[12], ^b[13], ^b[14], ^b[15]}
+		return internal(netip.AddrFrom4([4]byte(b[4:8]))) || internal(netip.AddrFrom4(client))
+	}
+	return false
+}
+
+// Allows reports whether the guest may reach dst over network ("tcp" or
+// "udp": nothing else is allowed).
 func (p *Policy) Allows(network string, dst netip.AddrPort) bool {
 	if p.Open {
 		return true
 	}
-	a := dst.Addr().Unmap()
+	if network != "tcp" && network != "udp" {
+		return false
+	}
+	a := dst.Addr().Unmap().WithZone("")
 	for _, r := range p.Allow {
 		if r.Net.Contains(a) && (r.Port == 0 || r.Port == dst.Port()) {
 			return true
@@ -180,7 +231,8 @@ func (p *Policy) ownAddress(a netip.Addr) bool {
 }
 
 // Name reports whether the guest may resolve name: with Domains, those and
-// their subdomains only.
+// their subdomains only. That includes host.lima.internal and the VM's own
+// name, which then get NXDOMAIN from the resolver.
 func (p *Policy) Name(name string) bool {
 	if p.Open || len(p.Domains) == 0 {
 		return true
@@ -205,7 +257,13 @@ func (p *Policy) Answered(name string, ips []net.IP) {
 	if p.resolved == nil {
 		p.resolved = map[netip.Addr]time.Time{}
 	}
-	until := time.Now().Add(resolvedFor)
+	now := time.Now()
+	for a, until := range p.resolved {
+		if !now.Before(until) {
+			delete(p.resolved, a)
+		}
+	}
+	until := now.Add(resolvedFor)
 	for _, ip := range ips {
 		if a, ok := netip.AddrFromSlice(ip); ok {
 			p.resolved[a.Unmap()] = until

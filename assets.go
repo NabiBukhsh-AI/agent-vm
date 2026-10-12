@@ -8,3 +8,14 @@ import _ "embed"
 //
 //go:embed agent-vm.setup.sh
 var SetupScript string
+
+// The license of agent-vm, the notice about third_party/, and the licenses of
+// what the binary is built from (scripts/licenses): `agent-vm licenses`.
+var (
+	//go:embed LICENSE
+	License string
+	//go:embed NOTICE
+	Notice string
+	//go:embed THIRD_PARTY_LICENSES
+	ThirdPartyLicenses string
+)

@@ -2,19 +2,19 @@ package gitguard
 
 import (
 	"context"
-	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/sylvinus/agent-vm/internal/gitx"
 	"github.com/sylvinus/agent-vm/internal/version"
 )
 
-// readonlyNames protects a name, and a bare repository has none: a folder
-// with HEAD, objects/ and refs/ is a repository to git, found by the same
-// upward search from the current directory as a .git. Its config then
-// applies, and some of it names commands git runs (core.pager on `git log`).
-// The VM can create such a folder anywhere in a share.
-// safe.bareRepository=explicit (git 2.38+) makes git use one only when
-// --git-dir or GIT_DIR names it.
+// A bare repository has no name for readonlyNames to protect: a folder with
+// HEAD, objects/ and refs/ is a repository to git, found by the same upward
+// search from the current directory as a .git. Its config then applies, and
+// some of it names commands git runs (core.pager on `git log`). The VM can
+// create such a folder anywhere in a share. safe.bareRepository=explicit (git
+// 2.38+) makes git use one only when --git-dir or GIT_DIR names it.
 
 // Bare-repository states.
 const (
@@ -28,18 +28,32 @@ const (
 // not told about. Read from /, outside any repository: git only honours the
 // setting from the system and global config.
 func BareState(ctx context.Context) string {
-	if _, err := exec.LookPath("git"); err != nil {
+	if !gitx.Have() {
 		return BareNoGit
 	}
-	out, _ := exec.CommandContext(ctx, "git", "--version").Output()
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	out, _ := gitx.Untrusted(ctx, "--version").Output()
 	v := strings.TrimPrefix(strings.TrimSpace(string(out)), "git version ")
 	v, _, _ = strings.Cut(v, " ")
+	// Git's release candidates (2.38.0-rc1) are not semver prereleases.
+	v, _, _ = strings.Cut(v, "-")
 	if !version.AtLeast(v, "2.38.0") {
 		return BareOld
 	}
-	cmd := exec.CommandContext(ctx, "git", "config", "--get", "safe.bareRepository")
+	// gitx.Untrusted sets the value on the command line: that scope is not
+	// the user's, the last of the others is.
+	cmd := gitx.Untrusted(ctx, "config", "--show-scope", "--get-all", "safe.bareRepository")
 	cmd.Dir = "/"
-	if out, _ := cmd.Output(); strings.TrimSpace(string(out)) == "explicit" {
+	cmd.WaitDelay = 2 * time.Second
+	out, _ = cmd.Output()
+	value := ""
+	for _, l := range strings.Split(string(out), "\n") {
+		if scope, v, ok := strings.Cut(l, "\t"); ok && scope != "command" {
+			value = strings.TrimSpace(v)
+		}
+	}
+	if value == "explicit" {
 		return BareOK
 	}
 	return BareUnset

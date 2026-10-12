@@ -65,8 +65,8 @@ func (b *box) write(p, content string) {
 
 func (b *box) vol(lines ...string) { b.write(b.volumes, strings.Join(lines, "\n")+"\n") }
 
-// compare runs both scans of the project and wants the same lines.
-func (b *box) compare(name string) []string {
+// useEnv makes this process's git read the sandbox's config, as Scan runs it.
+func (b *box) useEnv() {
 	b.t.Helper()
 	for _, kv := range b.env() {
 		k, v, _ := strings.Cut(kv, "=")
@@ -79,6 +79,12 @@ func (b *box) compare(name string) []string {
 		b.t.Setenv("XDG_CONFIG_HOME", "")
 		os.Unsetenv("XDG_CONFIG_HOME")
 	}
+}
+
+// compare runs both scans of the project and wants the same lines.
+func (b *box) compare(name string) []string {
+	b.t.Helper()
+	b.useEnv()
 	refs := mounts.Refs(b.home, bashref.Root(), b.state, b.home+"/.lima")
 	shares := Shares(b.proj, mounts.RWDirs(mounts.Entries(b.volumes, b.proj, b.home, refs, io.Discard)))
 	got := Scan(context.Background(), shares, b.home).Lines()
@@ -180,6 +186,8 @@ func TestScanCommandKeys(t *testing.T) {
 		"remote.o.uploadpack", "remote.o.receivepack", "tar.tgz.command", "instaweb.httpd",
 		"sendemail.smtpServer", "sendemail.sendmailCmd", "sendemail.toCmd", "sendemail.ccCmd",
 		"sendemail.headerCmd", "sendemail.work.toCmd", "gpg.ssh.defaultKeyCommand",
+		"hook.lint.command", "imap.tunnel", "lfs.customtransfer.agent.path", "lfs.extension.ext.clean",
+		"lfs.extension.ext.smudge", "init.templateDir",
 	}
 	for _, k := range keys {
 		v := "tools/run.sh"
@@ -429,10 +437,17 @@ func TestScanBash(t *testing.T) {
 			switch {
 			case !ok:
 				t.Errorf("no expectation for %q", name)
-			case want == "" && name != "node_modules" && got != "":
+			case want == "" && got != "":
 				t.Errorf("expected nothing, got:\n%s", got)
-			case want != "" && !strings.Contains(got, want):
-				t.Errorf("expected %q in:\n%s", want, got)
+			case want != "":
+				// On one line: not across two.
+				found := false
+				for _, l := range strings.Split(got, "\n") {
+					found = found || strings.Contains(l, want)
+				}
+				if !found {
+					t.Errorf("expected %q in a line of:\n%s", want, got)
+				}
 			}
 		})
 	}

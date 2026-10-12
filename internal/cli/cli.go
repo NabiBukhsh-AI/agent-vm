@@ -1,5 +1,6 @@
-// Package cli is agent-vm's command line: the commands of 0.2's agent-vm.sh,
-// with the same options, output and exit statuses.
+// Package cli is agent-vm's command line. The commands and options are those
+// of 0.2's agent-vm.sh, with the additions and changes of 0.3 in CHANGELOG.md
+// (--scratch, install, info, code, exit status 2 for wrong usage...).
 package cli
 
 import (
@@ -29,26 +30,55 @@ type IO struct {
 var noVMOpts = map[string]bool{
 	"stop": true, "rm": true, "destroy": true, "destroy-all": true, "list": true, "status": true,
 	"name": true, "info": true, "env": true, "project-env": true, "version": true, "--version": true,
-	"-V": true, "doctor": true, "install": true, "uninstall": true, "help": true, "--help": true, "-h": true,
+	"-V": true, "licenses": true, "doctor": true, "install": true, "uninstall": true, "help": true, "--help": true, "-h": true,
+}
+
+// exitUsage is the exit status of a command line that is wrong: an unknown
+// command, option or argument, a missing value.
+const exitUsage = 2
+
+// stateful are the commands that work on agent-vm's folder or its VMs, so
+// need to know where they are. The others (help, version, licenses, a wrong
+// command line) run without: `version --min` must not fail for want of a
+// home folder, where 1 means "older".
+var stateful = map[string]bool{
+	"name": true, "list": true, "status": true, "stop": true, "rm": true, "destroy": true, "destroy-all": true,
+	"info": true, "env": true, "project-env": true, "claude": true, "opencode": true, "codex": true, "vibe": true,
+	"pi": true, "shell": true, "sh": true, "run": true, "setup": true, "doctor": true, "install": true,
+	"uninstall": true, "code": true,
+}
+
+// needsState reports whether the command line runs a command in stateful.
+// `name` is one: the length of the Lima home's path limits the names.
+func needsState(args []string) bool {
+	opts := newVMOpts()
+	_, rest, err := opts.takeAll(args)
+	return err == nil && len(rest) > 0 && stateful[rest[0]]
 }
 
 // Main runs agent-vm with args (os.Args[1:]) and returns its exit status.
 func Main(args []string, io IO) int {
+	ctx := context.Background()
+	if !needsState(args) {
+		return (&app{io: io}).main(ctx, args)
+	}
 	e, err := newApp(io)
 	if err != nil {
 		fmt.Fprintf(io.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	return e.main(context.Background(), args)
+	return e.main(ctx, args)
 }
 
+// main runs the command line. An app made only of io is enough for the
+// commands outside stateful.
 func (e *app) main(ctx context.Context, args []string) int {
 	io := e.io
 	opts := newVMOpts()
 	lead, args, err := opts.takeAll(args)
 	if err != nil {
 		fmt.Fprintf(io.Stderr, "Error: %v\n", err)
-		return 1
+		return exitUsage
 	}
 	cmd := "help"
 	if len(args) > 0 {
@@ -56,7 +86,7 @@ func (e *app) main(ctx context.Context, args []string) int {
 	}
 	if len(lead) > 0 && noVMOpts[cmd] {
 		fmt.Fprintf(io.Stderr, "Error: %s is an option for the commands that start a VM (claude, opencode, codex, vibe, pi, shell, run, code), not for '%s'.\n", lead[0], cmd)
-		return 1
+		return exitUsage
 	}
 	switch cmd {
 	case "help", "--help", "-h":
@@ -64,6 +94,8 @@ func (e *app) main(ctx context.Context, args []string) int {
 		return 0
 	case "version", "--version", "-V":
 		return versionCmd(args, io)
+	case "licenses":
+		return licensesCmd(args, io)
 	case "name":
 		return nameCmd(args, io)
 	case "list", "status":
@@ -98,7 +130,7 @@ func (e *app) main(ctx context.Context, args []string) int {
 		return e.codeCmd(ctx, opts, args)
 	default:
 		fmt.Fprintf(io.Stderr, "Unknown command: %s\nRun 'agent-vm help' for usage.\n", cmd)
-		return 1
+		return exitUsage
 	}
 }
 
@@ -140,7 +172,6 @@ func versionCmd(args []string, io IO) int {
 }
 
 // updateCommand is how this copy of agent-vm is updated.
-// TODO(0.3): the install methods of the Go releases (see PLAN_0.3.0.md, phase 4).
 func updateCommand() string {
 	return "curl -fsSL https://www.agent-vm.org/install.sh | sh"
 }

@@ -34,6 +34,7 @@ Commands:
                      each was cloned from
   doctor             Check the host, Lima, the base template and this
                      directory, and say how to fix what is wrong. Read-only.
+  licenses           Print the licenses of agent-vm and of what is built into it
   name [dir]         Print the VM name for a directory (default: cwd)
   info [dir]         Print machine-readable state as key=value lines
                      (version, template, state_dir, project_env, dir,

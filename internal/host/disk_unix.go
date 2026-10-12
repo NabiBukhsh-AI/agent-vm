@@ -10,5 +10,5 @@ func FreeGiB(dir string) (int, bool) {
 	if err := unix.Statfs(dir+"/.", &st); err != nil {
 		return 0, false
 	}
-	return int(uint64(st.Bavail) * uint64(st.Bsize) >> 30), true
+	return int(uint64(st.Bavail) * blockSize(&st) >> 30), true
 }

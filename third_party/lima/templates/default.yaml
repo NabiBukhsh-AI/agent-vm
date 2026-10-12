@@ -82,7 +82,8 @@ mounts: []
 #    # 🟢 Builtin default: "openssh-sftp-server" if OpenSSH SFTP Server binary is found, otherwise "builtin"
 #    sftpDriver: null
 #    # File names that are read-only at any depth, enforced by the host even against a compromised guest.
-#    # Requires `sftpDriver: builtin` on every mount. Not supported on Windows hosts.
+#    # Requires `sftpDriver: builtin` on every mount, and a writable mount of a folder holding another
+#    # one must list the same names.
 #    # 🟢 Builtin default: []
 #    readonlyNames: []
 #  9p:
