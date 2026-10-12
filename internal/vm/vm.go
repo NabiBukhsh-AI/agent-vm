@@ -96,7 +96,17 @@ type Settings struct {
 	// NoContainerd leaves out the backend's own containerd: Docker, when
 	// installed, ships its own.
 	NoContainerd bool
+
+	// noEphemeralPorts: see ephemeralPorts.
+	noEphemeralPorts bool
 }
+
+// ephemeralPorts is the guest kernel's range for the ports a program gets
+// when it asks for any free one (Debian's ip_local_port_range). Never
+// forwarded: nobody chose them (Chromium's DevTools port, language
+// servers...), and each would land on the host's loopback with a
+// notification.
+var ephemeralPorts = [2]int{32768, 60999}
 
 // ShellOpts is a command run in a running VM.
 type ShellOpts struct {

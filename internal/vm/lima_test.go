@@ -10,7 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lima-vm/lima/v2/pkg/guestagent/api"
+	"github.com/lima-vm/lima/v2/pkg/hostagent/events"
 	"github.com/lima-vm/lima/v2/pkg/limatype"
+	"github.com/lima-vm/lima/v2/pkg/limayaml"
+	"github.com/lima-vm/lima/v2/pkg/portfwd"
 
 	"github.com/sylvinus/agent-vm/internal/limaembed"
 	"github.com/sylvinus/agent-vm/internal/paths"
@@ -202,6 +206,60 @@ func TestLimaLifecycle(t *testing.T) {
 		if _, err := l.Get(ctx, name); !errors.Is(err, ErrNotFound) {
 			t.Errorf("%s after delete: %v", name, err)
 		}
+	}
+}
+
+// Start gives a VM, made before or not, the rule leaving the guest's
+// ephemeral ports unforwarded: on 127.0.0.1, 0.0.0.0, ::, TCP or UDP, as
+// Lima's forwarder reads it. Other ports are forwarded still.
+func TestLimaEphemeralPorts(t *testing.T) {
+	ctx := context.Background()
+	l := newTestLima(t)
+	// Unconfined: Start edits it, then refuses to boot it.
+	plain := []Mount{{Location: t.TempDir(), Writable: true}}
+	rev := ReverseSSHFS
+	if err := l.Create(ctx, "p-12345678", "template:debian-13", Settings{Mounts: &plain, MountType: &rev}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Start(ctx, "p-12345678", io.Discard); !errors.Is(err, ErrUnconfined) {
+		t.Fatalf("start: %v", err)
+	}
+	inst, err := l.inspect(ctx, "p-12345678")
+	if err != nil || inst.Config == nil {
+		t.Fatalf("inspect: %v %v", err, inst.Errors)
+	}
+	def := limatype.PortForward{}
+	limayaml.FillPortForwardDefaults(&def, inst.Dir, inst.Config.User, inst.Param)
+	var got []events.PortForwardEvent
+	fw := portfwd.NewPortForwarder(append(inst.Config.PortForwards, def), false, false, func(ev *events.PortForwardEvent) { got = append(got, *ev) })
+	defer fw.Close()
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	for _, p := range []*api.IPPort{
+		{Protocol: "tcp", Ip: "127.0.0.1", Port: 32768},
+		{Protocol: "tcp", Ip: "0.0.0.0", Port: 45000},
+		{Protocol: "tcp", Ip: "::", Port: 60999},
+		{Protocol: "udp", Ip: "0.0.0.0", Port: 50000},
+	} {
+		got = nil
+		fw.OnEvent(cctx, nil, &api.Event{AddedLocalPorts: []*api.IPPort{p}})
+		if len(got) != 1 || got[0].Type != events.PortForwardEventNotForwarding {
+			t.Errorf("%s %s:%d: %+v", p.Protocol, p.Ip, p.Port, got)
+		}
+	}
+	// Forwarded, or not because the host uses it: not ignored either way.
+	got = nil
+	fw.OnEvent(cctx, nil, &api.Event{AddedLocalPorts: []*api.IPPort{{Protocol: "tcp", Ip: "0.0.0.0", Port: 32767}}})
+	if len(got) != 1 || got[0].Type == events.PortForwardEventNotForwarding {
+		t.Errorf("32767: %+v", got)
+	}
+
+	// Once there, not written again.
+	y := filepath.Join(inst.Dir, "lima.yaml")
+	before, _ := os.ReadFile(y)
+	l.Start(ctx, "p-12345678", io.Discard)
+	if after, _ := os.ReadFile(y); string(after) != string(before) || strings.Count(string(after), "ignore: true") != 1 {
+		t.Errorf("rewritten:\n%s", after)
 	}
 }
 

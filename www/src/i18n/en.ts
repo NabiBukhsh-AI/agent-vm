@@ -163,7 +163,7 @@ export const en = {
       },
       {
         title: 'Reach the dev server',
-        body: 'Every port opened in the VM is forwarded to the same port on your localhost, so a dev server opens in your browser as usual, and a notification says so. A port a program of yours already listens on is not taken: the notification says that too. Treat the forwarded ports as the agent’s.',
+        body: 'Every port opened in the VM is forwarded to the same port on your localhost, so a dev server opens in your browser as usual, and a notification says so. A port a program of yours already listens on is not taken: the notification says that too. Ports 32768-60999, which the VM hands out to programs asking for any free port, are not forwarded. Treat the forwarded ports as the agent’s.',
         code: 'agent-vm run npm run dev         # then open localhost:5173\nagent-vm run docker compose up',
       },
       {
@@ -488,7 +488,7 @@ export const en = {
           {
             title: 'Refused directories and files',
             paras: [
-              'agent-vm will not share your home directory, `/`, its own directory, `~/.agent-vm`, your own Lima’s directory (`~/.lima`), or a directory containing one of them: `cd ~ && agent-vm shell` would hand the VM your dotfiles and SSH keys.',
+              'agent-vm will not share your home directory, `/`, its own directory, `~/.agent-vm`, your own Lima’s directory (`~/.lima`), or a directory containing one of them: `cd ~ && agent-vm shell` would hand the VM your dotfiles and SSH keys. `--unsafe-disable-security-prompts` lets it share its own directory, to work on agent-vm from a clone: the VM can then change the agent-vm your machine runs.',
               'It never reads a file in the project by its path, since the VM can make it a symlink to any file of yours. Its own git calls in a project refuse a bare repository and run no `core.fsmonitor` or pager.',
             ],
             list: [],
@@ -606,7 +606,7 @@ export const en = {
               'A VM reaches the internet, not your machine: its loopback (where the other VMs’ ports are forwarded), its own addresses and your local networks (private, link-local and carrier-grade NAT ranges) are refused, on your machine, by the network stack agent-vm runs for each VM. Root in the VM cannot lift it.',
               'There is no `~/.agent-vm/network` by default, and none is needed: without it, the VMs reach the whole internet and nothing of your machine or local networks. Write one to open holes, read when a VM starts, one line each: `allow` an address (`192.168.1.20`), an address and port (`192.168.1.20:5432`, `[fd00::5]:80`), a network (`10.8.0.0/16`), or a service on your machine’s loopback, `localhost:PORT` (`localhost` alone opens every port), which the VM reaches at `192.168.5.2`. An `allow` line covers TCP and UDP.',
               '`domain` lines restrict the internet itself: those domains and their subdomains (`domain github.com` covers `api.github.com`; `*.github.com` means the same) become the only names the VMs resolve, and an address is reachable once agent-vm’s DNS gave it for one of them. `allow` lines still apply. A line it cannot read stops the start, named; `doctor` checks the file. `AGENT_VM_UNSAFE_OPEN_NETWORK=1` in your shell turns isolation off.',
-              'Each port a VM listens on is forwarded to your `127.0.0.1`, and a notification says so. A port a program of yours listens on is left to it, with a notification too: on macOS, a VM listening first on 5432 would otherwise receive the connections, and passwords, meant for your local Postgres. On a free port, what you send goes to the VM: check the notification.',
+              'Each port a VM listens on is forwarded to your `127.0.0.1`, and a notification says so, except 32768-60999: the guest gives those to programs asking for any free port (Chromium’s DevTools port, language servers), and they stay inside the VM. A port a program of yours listens on is left to it, with a notification too: on macOS, a VM listening first on 5432 would otherwise receive the connections, and passwords, meant for your local Postgres. On a free port, what you send goes to the VM: check the notification.',
               'No VM reaches the editor of another one any more, but `agent-vm code` still gives each its own password, made in that VM, and its own host name, `<vm-name>.localhost`. A VM can serve a page on a forwarded port and send your browser to another VM’s host name on that port; browsers keep cookies per host name and not per port, so the browser hands it that editor’s cookie. The VM cannot use it against the editor itself, being refused your loopback, but stop `agent-vm code` (Ctrl-C) when you are not using it. Chrome and Firefox resolve `*.localhost` themselves; Safari may not, and then `127.0.0.1` in a private window kept for the editor does the same.',
             ],
             list: [],

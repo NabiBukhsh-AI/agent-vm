@@ -330,9 +330,26 @@ func (s *start) ensureRunning() error {
 	}
 	// `cd ~ && agent-vm shell` would hand the VM your dotfiles and SSH
 	// keys, read-write; a share holding agent-vm's own files lets the VM
-	// change what the host runs next.
+	// change what the host runs next. agent-vm's own clone may be shared
+	// once the security prompts are off: working on agent-vm in its VM.
 	if !o.Scratch {
-		if why, bad := mounts.UnsafeProject(s.dir, s.refs()); bad {
+		refs := s.refs()
+		if _, off := s.promptsDisabledBy(); off {
+			var others []mounts.Ref
+			for _, r := range refs {
+				if r.What != mounts.SelfRef {
+					others = append(others, r)
+				}
+			}
+			if _, bad := mounts.UnsafeProject(s.dir, others); !bad {
+				if why, self := mounts.UnsafeLocation(s.dir, refs); self {
+					s.warnf("Warning: sharing %s with the VM: it %s. The VM can change the agent-vm this machine runs next.", s.dir, why)
+					s.confirmUnsafe()
+				}
+				refs = others
+			}
+		}
+		if why, bad := mounts.UnsafeProject(s.dir, refs); bad {
 			s.warnf("Error: refusing to share %s with a VM: it %s.\nRun agent-vm from a project directory.", s.dir, why)
 			return errStop
 		}

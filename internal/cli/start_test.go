@@ -274,6 +274,38 @@ func TestStartRefusesHome(t *testing.T) {
 	}
 }
 
+// agent-vm's own folder: refused, shared under
+// --unsafe-disable-security-prompts. The home directory stays refused.
+func TestStartSelfDir(t *testing.T) {
+	se := newStartEnv(t)
+	se.base()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip(err)
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	self := paths.Host(filepath.Dir(exe))
+	t.Chdir(self)
+	t.Setenv("PWD", self)
+	if se.run("run", "true") != 1 || !strings.Contains(se.out(), "it is, or contains, agent-vm itself") {
+		t.Errorf("self: %s", se.out())
+	}
+	if strings.Contains(se.fake.CallLog(), "clone") {
+		t.Error("cloned anyway")
+	}
+	if se.run("--unsafe-disable-security-prompts", "run", "true") != 0 ||
+		!strings.Contains(se.out(), "Warning: sharing "+self+" with the VM: it is, or contains, agent-vm itself") ||
+		!strings.Contains(se.out(), "Continuing: --unsafe-disable-security-prompts.") {
+		t.Errorf("self, prompts off: %s", se.out())
+	}
+	t.Setenv("USERPROFILE", se.home)
+	t.Chdir(se.home)
+	t.Setenv("PWD", se.home)
+	if se.run("--unsafe-disable-security-prompts", "shell") != 1 || !strings.Contains(se.out(), "your home directory") {
+		t.Errorf("home, prompts off: %s", se.out())
+	}
+}
+
 func TestStartReadonly(t *testing.T) {
 	se := newStartEnv(t)
 	se.base()

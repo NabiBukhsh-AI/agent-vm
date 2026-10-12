@@ -251,6 +251,11 @@ func exprs(s Settings) ([]string, error) {
 	if s.SSHLocalPort != nil {
 		e = append(e, fmt.Sprintf(".ssh.localPort = %d", *s.SSHLocalPort))
 	}
+	if s.noEphemeralPorts {
+		// guestIP 0.0.0.0, not required to be: an ignore rule on Lima's
+		// default 127.0.0.1 leaves the listeners on 0.0.0.0 forwarded.
+		e = append(e, fmt.Sprintf(`.portForwards = [{"guestIP": "0.0.0.0", "guestIPMustBeZero": false, "guestPortRange": [%d, %d], "proto": "any", "ignore": true}]`, ephemeralPorts[0], ephemeralPorts[1]))
+	}
 	if s.MountType != nil {
 		if *s.MountType == "" {
 			e = append(e, "del(.mountType)")
@@ -443,6 +448,14 @@ func (l *Lima) Start(ctx context.Context, name string, log io.Writer) error {
 	}
 	if inst.Config == nil {
 		return errors.Join(inst.Errors...)
+	}
+	// Here, so that VMs made before it get it too; nothing is written when
+	// it is there already.
+	if err := l.Edit(ctx, name, Settings{noEphemeralPorts: true}); err != nil {
+		return err
+	}
+	if inst, err = l.inspect(ctx, name); err != nil {
+		return err
 	}
 	if err := Confined(fromLima(inst)); err != nil {
 		return err

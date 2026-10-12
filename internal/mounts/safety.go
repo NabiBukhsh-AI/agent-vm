@@ -40,13 +40,16 @@ type Ref struct {
 	Path string // physical, folded
 }
 
+// SelfRef is the What of the Ref to agent-vm's own folder.
+const SelfRef = "agent-vm itself"
+
 // Refs are the locations no share may reach: the home folder (dotfiles,
 // SSH keys, every other project), agent-vm itself (the host runs its
 // files), agent-vm's state (every VM's env) and Lima's homes, agent-vm's
 // and the user's own (the VMs' SSH key and disks, its _config adding
 // mounts to every VM).
 func Refs(home, self, state string, limaHomes ...string) []Ref {
-	refs := []Ref{{"your home directory", home}, {"agent-vm itself", self}, {"agent-vm's state", state}}
+	refs := []Ref{{"your home directory", home}, {SelfRef, self}, {"agent-vm's state", state}}
 	for _, h := range limaHomes {
 		refs = append(refs, Ref{"Lima's state", h})
 	}

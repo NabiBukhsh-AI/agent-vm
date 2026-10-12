@@ -23,6 +23,9 @@ stays on its tags. Changes so far, against 0.2.1:
 - A desktop notification when a port the VM listens on is forwarded to your
   machine, and when it is not because a program of yours uses it.
   `AGENT_VM_NOTIFY=0` turns them off.
+- Ports 32768-60999 are no longer forwarded: the guest gives them to
+  programs asking for any free port (Chromium's DevTools port, language
+  servers...), which nobody opens from the host.
 - Files your machine runs without asking are guarded: when the VM writes,
   creates, renames or removes `.envrc`, `.vscode/tasks.json`,
   `.vscode/settings.json`, `.vscode/launch.json`, `.pre-commit-config.yaml`,
@@ -279,6 +282,8 @@ stays on its tags. Changes so far, against 0.2.1:
   of the last three are refused as a project: `cd ~ && agent-vm shell`
   shared `~/.ssh` and every dotfile read-write, and from inside agent-vm's
   folder the VM could change the files the host runs next.
+  `--unsafe-disable-security-prompts` shares agent-vm's own directory
+  anyway, with a warning, to work on agent-vm from a clone.
 - `--readonly` on a stopped VM that last ran writable makes it read-only
   before it boots. It used to start it writable, then stop it and apply the
   change.
