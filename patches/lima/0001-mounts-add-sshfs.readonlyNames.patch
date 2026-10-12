@@ -14,21 +14,24 @@ Validation requires mountType reverse-sshfs, and sftpDriver builtin on
 every mount, because the OpenSSH sftp-server serves any host path to
 the guest. It also rejects entries that are not plain file names.
 
+A writable mount of a folder that holds another writable mount reaches
+the inner one's files too, so it must list the same names.
+
 Assisted-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Signed-off-by: Sylvain Zimmer <sylvain@sylvainzimmer.com>
 ---
- pkg/hostagent/mount.go                  |  1 +
- pkg/limatmpl/embed.go                   |  4 ++
- pkg/limatmpl/embed_test.go              |  4 +-
- pkg/limatype/lima_yaml.go               |  2 +
- pkg/limayaml/defaults.go                |  3 ++
- pkg/limayaml/defaults_test.go           |  2 +
- pkg/limayaml/validate.go                | 29 ++++++++++++++
- pkg/limayaml/validate_test.go           | 52 +++++++++++++++++++++++++
- templates/default.yaml                  |  4 ++
- website/content/en/docs/config/mount.md | 33 +++++++++++++++-
- website/content/en/docs/examples/ai.md  | 47 ++++++++++++++++++++++
- 11 files changed, 178 insertions(+), 3 deletions(-)
+ pkg/hostagent/mount.go                  |    1 
+ pkg/limatmpl/embed.go                   |    4 +
+ pkg/limatmpl/embed_test.go              |    4 +
+ pkg/limatype/lima_yaml.go               |    2 +
+ pkg/limayaml/defaults.go                |    3 +
+ pkg/limayaml/defaults_test.go           |    2 +
+ pkg/limayaml/validate.go                |   54 +++++++++++++++++++
+ pkg/limayaml/validate_test.go           |   89 +++++++++++++++++++++++++++++++
+ templates/default.yaml                  |    5 ++
+ website/content/en/docs/config/mount.md |   33 +++++++++++
+ website/content/en/docs/examples/ai.md  |   47 ++++++++++++++++
+ 11 files changed, 241 insertions(+), 3 deletions(-)
 
 diff --git a/pkg/hostagent/mount.go b/pkg/hostagent/mount.go
 index 4bc058f2..ebc4b77c 100644
@@ -120,7 +123,7 @@ index 916e4d8a..e6666be8 100644
  	expect.Mounts[0].NineP.ProtocolVersion = new("9p2000")
  	expect.Mounts[0].NineP.Msize = new("8KiB")
 diff --git a/pkg/limayaml/validate.go b/pkg/limayaml/validate.go
-index 5a6aaee0..10f693b0 100644
+index 5a6aaee0..33cefd5d 100644
 --- a/pkg/limayaml/validate.go
 +++ b/pkg/limayaml/validate.go
 @@ -178,6 +178,10 @@ func Validate(y *limatype.LimaYAML, warn bool) error {
@@ -134,7 +137,7 @@ index 5a6aaee0..10f693b0 100644
  	if warn && runtime.GOOS != "linux" {
  		for i, mount := range y.Mounts {
  			if mount.Virtiofs.QueueSize != nil {
-@@ -654,6 +658,31 @@ func validateParamIsUsed(y *limatype.LimaYAML) error {
+@@ -654,6 +658,56 @@ func validateParamIsUsed(y *limatype.LimaYAML) error {
  	return nil
  }
  
@@ -160,17 +163,51 @@ index 5a6aaee0..10f693b0 100644
 +			}
 +		}
 +	}
++	// A writable mount of a folder holding another writable mount reaches
++	// its files too: it has to protect the same names.
++	for i, outer := range y.Mounts {
++		for j, inner := range y.Mounts {
++			if i == j || outer.Writable == nil || !*outer.Writable || inner.Writable == nil || !*inner.Writable ||
++				!isWithin(outer.Location, inner.Location) {
++				continue
++			}
++			for _, name := range inner.SSHFS.ReadonlyNames {
++				if !slices.Contains(outer.SSHFS.ReadonlyNames, name) {
++					errs = errors.Join(errs, fmt.Errorf("field `mounts[%d].sshfs.readonlyNames` must contain %#q, as the writable mount `mounts[%d]` inside it does", i, name, j))
++				}
++			}
++		}
++	}
 +	return errs
++}
++
++// isWithin reports whether the folder child is parent or under it. Case is
++// ignored where the file systems usually do.
++func isWithin(parent, child string) bool {
++	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
++		parent, child = strings.ToLower(parent), strings.ToLower(child)
++	}
++	rel, err := filepath.Rel(parent, child)
++	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 +}
 +
  func validatePort(field string, port int) error {
  	switch {
  	case port < 0:
 diff --git a/pkg/limayaml/validate_test.go b/pkg/limayaml/validate_test.go
-index 38c3503f..2fa9e4e0 100644
+index 38c3503f..8040c296 100644
 --- a/pkg/limayaml/validate_test.go
 +++ b/pkg/limayaml/validate_test.go
-@@ -302,6 +302,58 @@ additionalDisks:
+@@ -5,6 +5,8 @@ package limayaml
+ 
+ import (
+ 	"fmt"
++	"os"
++	"path/filepath"
+ 	"runtime"
+ 	"testing"
+ 
+@@ -302,6 +304,93 @@ additionalDisks:
  	assert.Error(t, err, "field `additionalDisks[0].name is invalid`: identifier must not be empty")
  }
  
@@ -226,19 +263,55 @@ index 38c3503f..2fa9e4e0 100644
 +	}
 +}
 +
++// A writable mount of a parent folder must protect the names of the writable
++// mounts inside it.
++func TestValidateReadonlyNamesNested(t *testing.T) {
++	images := `images: [{"location": "/"}]`
++	parent := t.TempDir()
++	child := filepath.Join(parent, "child")
++	assert.NilError(t, os.Mkdir(child, 0o755))
++	protected := "{sftpDriver: builtin, readonlyNames: [.git]}"
++	builtin := "{sftpDriver: builtin}"
++	config := func(parentWritable bool, parentSSHFS string) string {
++		return fmt.Sprintf("mountType: reverse-sshfs\nmounts: [{location: %q, writable: true, sshfs: %s}, {location: %q, writable: %v, sshfs: %s}]",
++			child, protected, parent, parentWritable, parentSSHFS)
++	}
++	for _, tt := range []struct {
++		name    string
++		config  string
++		wantErr string
++	}{
++		{"parent protects the same names", config(true, protected), ""},
++		{"parent is read-only", config(false, builtin), ""},
++		{"parent writes .git", config(true, builtin), "field `mounts[1].sshfs.readonlyNames` must contain `.git`, as the writable mount `mounts[0]` inside it does"},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			y, err := Load(t.Context(), []byte(tt.config+"\n"+images), "lima.yaml")
++			assert.NilError(t, err)
++			err = Validate(y, false)
++			if tt.wantErr == "" {
++				assert.NilError(t, err)
++			} else {
++				assert.Error(t, err, tt.wantErr)
++			}
++		})
++	}
++}
++
  func TestValidateParamName(t *testing.T) {
  	images := `images: [{"location": "/"}]`
  	validProvision := `provision: [{"script": "echo $PARAM_name $PARAM_NAME $PARAM_Name_123"}]`
 diff --git a/templates/default.yaml b/templates/default.yaml
-index bd00a66f..36520678 100644
+index bd00a66f..39caeb37 100644
 --- a/templates/default.yaml
 +++ b/templates/default.yaml
-@@ -81,6 +81,10 @@ mounts: []
+@@ -81,6 +81,11 @@ mounts: []
  #    # SFTP driver, "builtin" or "openssh-sftp-server". "openssh-sftp-server" is recommended.
  #    # 🟢 Builtin default: "openssh-sftp-server" if OpenSSH SFTP Server binary is found, otherwise "builtin"
  #    sftpDriver: null
 +#    # File names that are read-only at any depth, enforced by the host even against a compromised guest.
-+#    # Requires `sftpDriver: builtin` on every mount. Not supported on Windows hosts.
++#    # Requires `sftpDriver: builtin` on every mount, and a writable mount of a folder holding another
++#    # one must list the same names.
 +#    # 🟢 Builtin default: []
 +#    readonlyNames: []
  #  9p:

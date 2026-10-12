@@ -1,7 +1,8 @@
-diff -ruN a/pkg/cidata/cidata.go b/pkg/cidata/cidata.go
---- a/pkg/cidata/cidata.go	2026-10-04 22:40:50.682160909 +0200
-+++ b/pkg/cidata/cidata.go	2026-10-04 22:41:13.280601483 +0200
-@@ -186,7 +186,9 @@
+diff --git a/pkg/cidata/cidata.go b/pkg/cidata/cidata.go
+index f42f4a0d..1254443b 100644
+--- a/pkg/cidata/cidata.go
++++ b/pkg/cidata/cidata.go
+@@ -186,7 +186,9 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
  			return nil, err
  		}
  		args.SlirpGateway = usernet.GatewayIP(subnet)
@@ -12,10 +13,11 @@ diff -ruN a/pkg/cidata/cidata.go b/pkg/cidata/cidata.go
  			args.SlirpDNS = usernet.GatewayIP(subnet)
  		} else {
  			args.SlirpDNS = usernet.DNSIP(subnet)
-diff -ruN a/pkg/driver/qemu/qemu.go b/pkg/driver/qemu/qemu.go
---- a/pkg/driver/qemu/qemu.go	2026-10-04 22:40:50.682160909 +0200
-+++ b/pkg/driver/qemu/qemu.go	2026-10-04 22:41:13.292779215 +0200
-@@ -47,6 +47,9 @@
+diff --git a/pkg/driver/qemu/qemu.go b/pkg/driver/qemu/qemu.go
+index 3910e0a1..1bb7bccf 100644
+--- a/pkg/driver/qemu/qemu.go
++++ b/pkg/driver/qemu/qemu.go
+@@ -47,6 +47,9 @@ type Config struct {
  	SSHLocalPort int
  	SSHAddress   string
  	VirtioGA     bool
@@ -25,7 +27,7 @@ diff -ruN a/pkg/driver/qemu/qemu.go b/pkg/driver/qemu/qemu.go
  }
  
  // minimumQemuVersion returns hardMin and softMin.
-@@ -802,10 +805,21 @@
+@@ -802,10 +805,21 @@ func Cmdline(ctx context.Context, cfg Config) (exe string, args []string, err er
  	// Network
  	// Configure default usernetwork with limayaml.MACAddress(driver.Instance.Dir) for eth0 interface
  	firstUsernetIndex := limayaml.FirstUsernetIndex(y)
@@ -49,10 +51,11 @@ diff -ruN a/pkg/driver/qemu/qemu.go b/pkg/driver/qemu/qemu.go
  		qemuSock, err := usernet.Sock(y.Networks[firstUsernetIndex].Lima, usernet.QEMUSock)
  		if err != nil {
  			return "", nil, err
-diff -ruN a/pkg/driver/qemu/qemu_driver.go b/pkg/driver/qemu/qemu_driver.go
---- a/pkg/driver/qemu/qemu_driver.go	2026-10-04 22:40:50.682160909 +0200
-+++ b/pkg/driver/qemu/qemu_driver.go	2026-10-04 22:41:13.300897703 +0200
-@@ -41,6 +41,7 @@
+diff --git a/pkg/driver/qemu/qemu_driver.go b/pkg/driver/qemu/qemu_driver.go
+index d5e7b5c7..5a68db80 100644
+--- a/pkg/driver/qemu/qemu_driver.go
++++ b/pkg/driver/qemu/qemu_driver.go
+@@ -41,6 +41,7 @@ import (
  	"github.com/lima-vm/lima/v2/pkg/limatype"
  	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
  	"github.com/lima-vm/lima/v2/pkg/limayaml"
@@ -60,7 +63,7 @@ diff -ruN a/pkg/driver/qemu/qemu_driver.go b/pkg/driver/qemu/qemu_driver.go
  	"github.com/lima-vm/lima/v2/pkg/networks/usernet"
  	"github.com/lima-vm/lima/v2/pkg/osutil"
  	"github.com/lima-vm/lima/v2/pkg/reflectutil"
-@@ -60,6 +61,46 @@
+@@ -60,6 +61,46 @@ type LimaQemuDriver struct {
  
  	swtpmCmd    *exec.Cmd
  	swtpmWaitCh chan error
@@ -107,7 +110,7 @@ diff -ruN a/pkg/driver/qemu/qemu_driver.go b/pkg/driver/qemu/qemu_driver.go
  }
  
  var _ driver.Driver = (*LimaQemuDriver)(nil)
-@@ -324,6 +365,18 @@
+@@ -324,6 +365,18 @@ func (l *LimaQemuDriver) Start(ctx context.Context) (chan error, error) {
  		SSHAddress:   l.Instance.SSHAddress,
  		VirtioGA:     l.virtioPort != "",
  	}
@@ -126,7 +129,7 @@ diff -ruN a/pkg/driver/qemu/qemu_driver.go b/pkg/driver/qemu/qemu_driver.go
  	qExe, qArgs, err := Cmdline(ctx, qCfg)
  	if err != nil {
  		return nil, err
-@@ -443,12 +496,19 @@
+@@ -443,12 +496,19 @@ func (l *LimaQemuDriver) Start(ctx context.Context) (chan error, error) {
  	go func() {
  		defer close(l.qWaitCh)
  		defer cancel()
@@ -148,7 +151,7 @@ diff -ruN a/pkg/driver/qemu/qemu_driver.go b/pkg/driver/qemu/qemu_driver.go
  			err := client.ConfigureDriver(ctx, l.Instance, l.SSHLocalPort)
  			if err != nil {
  				l.qWaitCh <- err
-@@ -716,8 +776,11 @@
+@@ -716,8 +776,11 @@ func (l *LimaQemuDriver) killSwtpm() error {
  func (l *LimaQemuDriver) shutdownQEMU(ctx context.Context, timeout time.Duration, qCmd *exec.Cmd, qWaitCh <-chan error) error {
  	// "power button" refers to ACPI on the most archs, except RISC-V
  	logrus.Info("Shutting down QEMU with the power button")
@@ -161,10 +164,11 @@ diff -ruN a/pkg/driver/qemu/qemu_driver.go b/pkg/driver/qemu/qemu_driver.go
  		err := client.UnExposeSSH(l.SSHLocalPort)
  		if err != nil {
  			logrus.Warnf("Failed to remove SSH binding for port %d", l.SSHLocalPort)
-diff -ruN a/pkg/hostagent/dns/dns.go b/pkg/hostagent/dns/dns.go
---- a/pkg/hostagent/dns/dns.go	2026-10-04 22:40:50.682160909 +0200
-+++ b/pkg/hostagent/dns/dns.go	2026-10-04 22:41:13.304956947 +0200
-@@ -29,6 +29,15 @@
+diff --git a/pkg/hostagent/dns/dns.go b/pkg/hostagent/dns/dns.go
+index 464934f9..7d1e75d7 100644
+--- a/pkg/hostagent/dns/dns.go
++++ b/pkg/hostagent/dns/dns.go
+@@ -29,6 +29,15 @@ const (
  	UDP Network = "udp"
  )
  
@@ -180,7 +184,7 @@ diff -ruN a/pkg/hostagent/dns/dns.go b/pkg/hostagent/dns/dns.go
  type HandlerOptions struct {
  	IPv6            bool
  	StaticHosts     map[string]string
-@@ -150,6 +159,11 @@
+@@ -150,6 +159,11 @@ func (h *Handler) handleQuery(ctx context.Context, w dns.ResponseWriter, req *dn
  	reply.SetReply(req)
  	logrus.Tracef("handleQuery received DNS query: %v", req)
  	for _, q := range req.Question {
@@ -192,7 +196,7 @@ diff -ruN a/pkg/hostagent/dns/dns.go b/pkg/hostagent/dns/dns.go
  		hdr := dns.RR_Header{
  			Name:   q.Name,
  			Rrtype: q.Qtype,
-@@ -181,6 +195,9 @@
+@@ -181,6 +195,9 @@ func (h *Handler) handleQuery(ctx context.Context, w dns.ResponseWriter, req *dn
  					continue
  				}
  			}
@@ -202,9 +206,11 @@ diff -ruN a/pkg/hostagent/dns/dns.go b/pkg/hostagent/dns/dns.go
  			for _, ip := range addrs {
  				var a dns.RR
  				ipv6 := ip.To4() == nil
-diff -ruN a/pkg/hostagent/dns/policy_test.go b/pkg/hostagent/dns/policy_test.go
---- a/pkg/hostagent/dns/policy_test.go	1970-01-01 01:00:00.000000000 +0100
-+++ b/pkg/hostagent/dns/policy_test.go	2026-10-04 22:41:13.304956947 +0200
+diff --git a/pkg/hostagent/dns/policy_test.go b/pkg/hostagent/dns/policy_test.go
+new file mode 100644
+index 00000000..06016ca9
+--- /dev/null
++++ b/pkg/hostagent/dns/policy_test.go
 @@ -0,0 +1,43 @@
 +// SPDX-FileCopyrightText: Copyright The Lima Authors
 +// SPDX-License-Identifier: Apache-2.0
@@ -249,10 +255,11 @@ diff -ruN a/pkg/hostagent/dns/policy_test.go b/pkg/hostagent/dns/policy_test.go
 +	_, asked := told["no.test"]
 +	assert.Assert(t, !asked)
 +}
-diff -ruN a/pkg/hostagent/hostagent.go b/pkg/hostagent/hostagent.go
---- a/pkg/hostagent/hostagent.go	2026-10-04 22:40:50.682160909 +0200
-+++ b/pkg/hostagent/hostagent.go	2026-10-04 22:41:13.309016191 +0200
-@@ -44,6 +44,7 @@
+diff --git a/pkg/hostagent/hostagent.go b/pkg/hostagent/hostagent.go
+index 36421eeb..d1e8fa70 100644
+--- a/pkg/hostagent/hostagent.go
++++ b/pkg/hostagent/hostagent.go
+@@ -44,6 +44,7 @@ import (
  	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
  	"github.com/lima-vm/lima/v2/pkg/limayaml"
  	"github.com/lima-vm/lima/v2/pkg/networks"
@@ -260,21 +267,22 @@ diff -ruN a/pkg/hostagent/hostagent.go b/pkg/hostagent/hostagent.go
  	"github.com/lima-vm/lima/v2/pkg/osutil"
  	"github.com/lima-vm/lima/v2/pkg/portfwd"
  	"github.com/lima-vm/lima/v2/pkg/sshutil"
-@@ -419,6 +420,10 @@
+@@ -419,6 +420,10 @@ func (a *HostAgent) Run(ctx context.Context) error {
  		hosts["host.lima.internal"] = networks.SlirpGateway
  		name := hostname.FromInstName(a.instName) // TODO: support customization
  		hosts[name] = networks.SlirpIPAddress
 +		// The guest reaches this server on the host's loopback, past any
 +		// usernet.Outbound policy.
-+		usernet.AllowHostService(a.udpDNSLocalPort)
-+		usernet.AllowHostService(a.tcpDNSLocalPort)
++		usernet.AllowHostService("udp", a.udpDNSLocalPort)
++		usernet.AllowHostService("tcp", a.tcpDNSLocalPort)
  		srvOpts := dns.ServerOptions{
  			UDPPort: a.udpDNSLocalPort,
  			TCPPort: a.tcpDNSLocalPort,
-diff -ruN a/pkg/networks/usernet/gvproxy.go b/pkg/networks/usernet/gvproxy.go
---- a/pkg/networks/usernet/gvproxy.go	2026-10-04 22:40:50.682160909 +0200
-+++ b/pkg/networks/usernet/gvproxy.go	2026-10-04 22:41:13.313075435 +0200
-@@ -10,10 +10,12 @@
+diff --git a/pkg/networks/usernet/gvproxy.go b/pkg/networks/usernet/gvproxy.go
+index 997fecd1..05c30cad 100644
+--- a/pkg/networks/usernet/gvproxy.go
++++ b/pkg/networks/usernet/gvproxy.go
+@@ -10,10 +10,12 @@ import (
  	"fmt"
  	"net"
  	"net/http"
@@ -287,7 +295,7 @@ diff -ruN a/pkg/networks/usernet/gvproxy.go b/pkg/networks/usernet/gvproxy.go
  	"time"
  
  	"github.com/balajiv113/fd"
-@@ -42,6 +44,29 @@
+@@ -42,6 +44,42 @@ var opts *GVisorNetstackOpts
  
  const gatewayMacAddr = "5a:94:ef:e4:0c:dd"
  
@@ -296,18 +304,31 @@ diff -ruN a/pkg/networks/usernet/gvproxy.go b/pkg/networks/usernet/gvproxy.go
 +// The host services the guest needs (AllowHostService) are reached past it.
 +var Outbound types.Outbound
 +
-+// hostServices are the ports of the host's loopback the guest may always reach.
++// Names and Answered, when set by the program running the hostagent, are
++// applied by the gateway's DNS server of the per-instance netstacks to every
++// query it gets (types.Configuration.DNSNames and DNSAnswered).
++var (
++	Names    func(name string) bool
++	Answered func(name string, ips []net.IP)
++)
++
++type hostService struct {
++	network string
++	port    uint16
++}
++
++// hostServices are the ports of 127.0.0.1 the guest may always reach.
 +var hostServices sync.Map
 +
-+// AllowHostService lets the guest reach port on the host's loopback, past
-+// Outbound: the hostagent's DNS server.
-+func AllowHostService(port int) {
-+	hostServices.Store(uint16(port), true)
++// AllowHostService lets the guest reach port of 127.0.0.1 over network ("tcp"
++// or "udp") past Outbound: the hostagent's DNS server.
++func AllowHostService(network string, port int) {
++	hostServices.Store(hostService{network, uint16(port)}, true)
 +}
 +
 +func outbound(network string, dst netip.AddrPort) bool {
-+	if dst.Addr().Unmap().IsLoopback() {
-+		if _, ok := hostServices.Load(dst.Port()); ok {
++	if dst.Addr().Unmap() == netip.AddrFrom4([4]byte{127, 0, 0, 1}) {
++		if _, ok := hostServices.Load(hostService{network, dst.Port()}); ok {
 +			return true
 +		}
 +	}
@@ -317,11 +338,52 @@ diff -ruN a/pkg/networks/usernet/gvproxy.go b/pkg/networks/usernet/gvproxy.go
  func StartGVisorNetstack(ctx context.Context, gVisorOpts *GVisorNetstackOpts) error {
  	opts = gVisorOpts
  
-@@ -81,6 +106,7 @@
+@@ -81,6 +119,9 @@ func StartGVisorNetstack(ctx context.Context, gVisorOpts *GVisorNetstackOpts) er
  			gatewayIP: "127.0.0.1",
  		},
  		GatewayVirtualIPs: []string{gatewayIP},
 +		Outbound:          outbound,
++		DNSNames:          Names,
++		DNSAnswered:       Answered,
  	}
  
  	groupErrs, ctx := errgroup.WithContext(ctx)
+diff --git a/pkg/networks/usernet/gvproxy_test.go b/pkg/networks/usernet/gvproxy_test.go
+index bc4e77df..0b4c46e7 100644
+--- a/pkg/networks/usernet/gvproxy_test.go
++++ b/pkg/networks/usernet/gvproxy_test.go
+@@ -5,6 +5,7 @@ package usernet
+ 
+ import (
+ 	"bufio"
++	"net/netip"
+ 	"os"
+ 	"path"
+ 	"testing"
+@@ -46,3 +47,26 @@ func createResolveFile(t *testing.T, file, content string) {
+ 	err = writer.Flush()
+ 	assert.NilError(t, err)
+ }
++
++// A host service is reached on 127.0.0.1, over its network and port only.
++func TestOutboundHostServices(t *testing.T) {
++	saved := Outbound
++	Outbound = func(string, netip.AddrPort) bool { return false }
++	t.Cleanup(func() { Outbound = saved })
++	AllowHostService("udp", 54321)
++	t.Cleanup(func() { hostServices.Delete(hostService{"udp", 54321}) })
++
++	for _, tc := range []struct {
++		network, dst string
++		want         bool
++	}{
++		{"udp", "127.0.0.1:54321", true},
++		{"udp", "[::ffff:127.0.0.1]:54321", true},
++		{"tcp", "127.0.0.1:54321", false},
++		{"udp", "127.0.0.1:54322", false},
++		{"udp", "127.0.0.2:54321", false},
++		{"udp", "[::1]:54321", false},
++	} {
++		assert.Equal(t, outbound(tc.network, netip.MustParseAddrPort(tc.dst)), tc.want, "%s %s", tc.network, tc.dst)
++	}
++}

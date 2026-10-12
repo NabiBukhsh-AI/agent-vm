@@ -1,7 +1,8 @@
-diff -ruN a/pkg/reversesshfs/reversesshfs.go b/pkg/reversesshfs/reversesshfs.go
---- a/pkg/reversesshfs/reversesshfs.go	2026-10-02 22:17:21.654894025 +0200
-+++ b/pkg/reversesshfs/reversesshfs.go	2026-10-02 22:24:14.300702230 +0200
-@@ -250,6 +250,9 @@
+diff --git a/pkg/reversesshfs/reversesshfs.go b/pkg/reversesshfs/reversesshfs.go
+index d59def7..fe77c0f 100644
+--- a/pkg/reversesshfs/reversesshfs.go
++++ b/pkg/reversesshfs/reversesshfs.go
+@@ -250,6 +250,9 @@ func (rsf *ReverseSSHFS) Start() error {
  	}
  	logrus.Debugf("executing ssh for remote sshfs: %s %v", rsf.sshCmd.Path, rsf.sshCmd.Args)
  	if err := rsf.sshCmd.Start(); err != nil {
@@ -11,7 +12,7 @@ diff -ruN a/pkg/reversesshfs/reversesshfs.go b/pkg/reversesshfs/reversesshfs.go
  		return err
  	}
  	logrus.Debugf("starting sftp server for %v", rsf.LocalPath)
-@@ -339,7 +342,9 @@
+@@ -339,17 +342,19 @@ done
  }
  
  func (rsf *ReverseSSHFS) Close() error {
@@ -20,12 +21,76 @@ diff -ruN a/pkg/reversesshfs/reversesshfs.go b/pkg/reversesshfs/reversesshfs.go
 +		logrus.Debugf("killing processes for remote sshfs: %s %v", rsf.sshCmd.Path, rsf.sshCmd.Args)
 +	}
  	var errors []error
- 	if rsf.sshCmd != nil && rsf.sshCmd.Process != nil {
- 		if err := rsf.sshCmd.Process.Kill(); err != nil {
-diff -ruN a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
---- a/pkg/reversesshfs/rooted.go	2026-10-02 22:17:21.654894025 +0200
-+++ b/pkg/reversesshfs/rooted.go	2026-10-02 22:24:14.300702230 +0200
-@@ -34,6 +34,9 @@
+-	if rsf.sshCmd != nil && rsf.sshCmd.Process != nil {
+-		if err := rsf.sshCmd.Process.Kill(); err != nil {
+-			errors = append(errors, err)
++	for _, cmd := range []*exec.Cmd{rsf.sshCmd, rsf.opensshSftpServerCmd} {
++		if cmd == nil || cmd.Process == nil {
++			continue
+ 		}
+-	}
+-	if rsf.opensshSftpServerCmd != nil && rsf.opensshSftpServerCmd.Process != nil {
+-		if err := rsf.opensshSftpServerCmd.Process.Kill(); err != nil {
++		if err := cmd.Process.Kill(); err != nil {
+ 			errors = append(errors, err)
+ 		}
++		// Reap it, and close its pipes. The error is the kill itself, or a second Close.
++		_ = cmd.Wait()
+ 	}
+ 	if len(errors) > 0 {
+ 		return fmt.Errorf("%v", errors)
+diff --git a/pkg/reversesshfs/reversesshfs_test.go b/pkg/reversesshfs/reversesshfs_test.go
+index eb6c323..8a6c37f 100644
+--- a/pkg/reversesshfs/reversesshfs_test.go
++++ b/pkg/reversesshfs/reversesshfs_test.go
+@@ -1,10 +1,42 @@
+ package reversesshfs
+ 
+ import (
++	"os"
++	"os/exec"
+ 	"runtime"
+ 	"testing"
++	"time"
+ )
+ 
++// TestHelperProcess is a child that waits to be killed, for TestCloseReaps.
++func TestHelperProcess(t *testing.T) {
++	if os.Getenv("REVERSESSHFS_TEST_SLEEP") == "" {
++		return
++	}
++	time.Sleep(time.Minute)
++}
++
++// Close kills the processes and reaps them: a killed child left unwaited stays a zombie, with its pipes.
++func TestCloseReaps(t *testing.T) {
++	start := func() *exec.Cmd {
++		cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
++		cmd.Env = append(os.Environ(), "REVERSESSHFS_TEST_SLEEP=1")
++		if err := cmd.Start(); err != nil {
++			t.Fatal(err)
++		}
++		return cmd
++	}
++	rsf := &ReverseSSHFS{sshCmd: start(), opensshSftpServerCmd: start()}
++	if err := rsf.Close(); err != nil {
++		t.Fatal(err)
++	}
++	for _, cmd := range []*exec.Cmd{rsf.sshCmd, rsf.opensshSftpServerCmd} {
++		if cmd.ProcessState == nil {
++			t.Error("a killed process was not waited for")
++		}
++	}
++}
++
+ func TestAddQuotes(t *testing.T) {
+ 	type testCase struct {
+ 		input    string
+diff --git a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
+index 3fdc9fa..d3d3a5b 100644
+--- a/pkg/reversesshfs/rooted.go
++++ b/pkg/reversesshfs/rooted.go
+@@ -34,6 +34,9 @@ type rootedHandlers struct {
  	noopRemovals map[string]time.Time // expiry, keyed by request path
  }
  
@@ -35,7 +100,7 @@ diff -ruN a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
  // noopRemovalTTL bounds how long an ExpectRemove token waits for the guest.
  const noopRemovalTTL = 5 * time.Second
  
-@@ -58,7 +61,11 @@
+@@ -58,7 +61,11 @@ func newRootedServer(rwc io.ReadWriteCloser, localPath string, readonly bool, re
  	handlers := sftp.Handlers{FileGet: h, FilePut: h, FileCmd: h, FileList: h}
  	// Sequential, as OpenSSH's sftp-server: otherwise two writes to the same range, or a write
  	// and the FSTAT or FSETSTAT sent after it, can run in either order.
@@ -48,7 +113,7 @@ diff -ruN a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
  	return srv, h, nil
  }
  
-@@ -158,7 +165,30 @@
+@@ -158,7 +165,30 @@ func (h *rootedHandlers) Fileread(r *sftp.Request) (io.ReaderAt, error) {
  	if err != nil {
  		return nil, err
  	}
@@ -80,7 +145,27 @@ diff -ruN a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
  }
  
  // writableFile is a file opened by openFile: checked against readonlyNames, without following symlinks.
-@@ -224,6 +254,10 @@
+@@ -205,6 +235,10 @@ func (h *rootedHandlers) OpenFile(r *sftp.Request) (sftp.WriterAtReaderAt, error
+ 	return f, nil
+ }
+ 
++// permMask is the part of a mode the client may set: never setuid, setgid or sticky, which
++// would give a file the host runs the privileges of its owner.
++const permMask = 0o777
++
+ // openMode returns the permissions sent with an Open request.
+ // For Open, pkg/sftp puts the open flags in r.Flags and drops the attribute flags,
+ // so r.AttrFlags and r.Attributes must not be used: SSH_FXF_APPEND reads as permissions.
+@@ -213,7 +247,7 @@ func openMode(r *sftp.Request) (uint32, bool) {
+ 	if len(r.Attrs) != 4 {
+ 		return 0, false
+ 	}
+-	return binary.BigEndian.Uint32(r.Attrs) & 0o7777, true
++	return binary.BigEndian.Uint32(r.Attrs) & permMask, true
+ }
+ 
+ // Filecmd implements sftp.FileCmder.
+@@ -224,6 +258,10 @@ func (h *rootedHandlers) Filecmd(r *sftp.Request) error {
  		if f, ok := r.HandleFile().(writableFile); ok {
  			return h.fsetstat(f.File, r)
  		}
@@ -91,7 +176,7 @@ diff -ruN a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
  		if h.isNoopTimes(r) {
  			return nil
  		}
-@@ -252,6 +286,20 @@
+@@ -252,6 +290,20 @@ func (h *rootedHandlers) PosixRename(r *sftp.Request) error {
  	return h.rename(r, false)
  }
  
@@ -112,7 +197,7 @@ diff -ruN a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
  // isNoopTimes reports whether r only sets the access and modification times of a
  // read-only name to its current modification time. Such a request is answered
  // without touching the file, so that the guest kernel still emits IN_ATTRIB:
-@@ -283,16 +331,11 @@
+@@ -283,16 +335,11 @@ func (h *rootedHandlers) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
  	}
  	switch r.Method {
  	case "List":
@@ -131,13 +216,17 @@ diff -ruN a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
  	case "Stat":
  		// FSTAT: r.Filepath is where the file was opened, which may now be another file.
  		var f *os.File
-@@ -346,6 +389,45 @@
+@@ -346,6 +393,49 @@ func (h *rootedHandlers) RealPath(p string) (string, error) {
  	return realPath(h.rootPath, p), nil
  }
  
 +// dirLister reads a directory as the client lists it, instead of all of it when it is opened:
 +// a huge directory takes neither the memory nor the time of a full read up front.
 +// pkg/sftp lists sequentially from offset 0, and closes it with the handle.
++//
++// Readdir looks the entries up relative to the open directory f (Go 1.26.9 and later: before,
++// by the path f was opened with, which the client could have made a symlink to a folder
++// outside the root), so the entries are those of f whatever it was renamed to.
 +type dirLister struct {
 +	mu   sync.Mutex
 +	f    *os.File
@@ -177,10 +266,11 @@ diff -ruN a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
  type listerAt []os.FileInfo
  
  func (l listerAt) ListAt(ls []os.FileInfo, offset int64) (int, error) {
-diff -ruN a/pkg/reversesshfs/rooted_darwin.go b/pkg/reversesshfs/rooted_darwin.go
---- a/pkg/reversesshfs/rooted_darwin.go	2026-10-02 22:17:21.654894025 +0200
-+++ b/pkg/reversesshfs/rooted_darwin.go	2026-10-02 22:24:14.300702230 +0200
-@@ -16,10 +16,15 @@
+diff --git a/pkg/reversesshfs/rooted_darwin.go b/pkg/reversesshfs/rooted_darwin.go
+index d81d06e..589c215 100644
+--- a/pkg/reversesshfs/rooted_darwin.go
++++ b/pkg/reversesshfs/rooted_darwin.go
+@@ -16,10 +16,15 @@ func statVFS(st *unix.Statfs_t) *sftp.StatVFS {
  		Ffree:   st.Ffree,
  		Favail:  st.Ffree,
  		Flag:    uint64(st.Flags),
@@ -197,10 +287,11 @@ diff -ruN a/pkg/reversesshfs/rooted_darwin.go b/pkg/reversesshfs/rooted_darwin.g
  // fchmodatNoFollow never follows a symlink at base, and fails on one, as on Linux.
  // If base is replaced by a symlink after the check, fchmodat changes the mode of the symlink itself.
  func fchmodatNoFollow(dirfd int, base string, mode uint32) error {
-diff -ruN a/pkg/reversesshfs/rooted_linux.go b/pkg/reversesshfs/rooted_linux.go
---- a/pkg/reversesshfs/rooted_linux.go	2026-10-02 22:17:21.654894025 +0200
-+++ b/pkg/reversesshfs/rooted_linux.go	2026-10-02 22:24:14.300702230 +0200
-@@ -23,6 +23,11 @@
+diff --git a/pkg/reversesshfs/rooted_linux.go b/pkg/reversesshfs/rooted_linux.go
+index 7ad5fd0..2ae2e83 100644
+--- a/pkg/reversesshfs/rooted_linux.go
++++ b/pkg/reversesshfs/rooted_linux.go
+@@ -23,6 +23,11 @@ func statVFS(st *unix.Statfs_t) *sftp.StatVFS {
  	}
  }
  
@@ -212,9 +303,131 @@ diff -ruN a/pkg/reversesshfs/rooted_linux.go b/pkg/reversesshfs/rooted_linux.go
  // fchmodatNoFollow never follows a symlink at base, and fails on one.
  // Only fchmodat2 (kernel 6.6+) supports AT_SYMLINK_NOFOLLOW, and it fails with EOPNOTSUPP on a symlink.
  func fchmodatNoFollow(dirfd int, base string, mode uint32) error {
-diff -ruN a/pkg/reversesshfs/rooted_test.go b/pkg/reversesshfs/rooted_test.go
---- a/pkg/reversesshfs/rooted_test.go	2026-10-02 22:17:21.654894025 +0200
-+++ b/pkg/reversesshfs/rooted_test.go	2026-10-02 22:24:14.300702230 +0200
+diff --git a/pkg/reversesshfs/rooted_robust_test.go b/pkg/reversesshfs/rooted_robust_test.go
+new file mode 100644
+index 0000000..a5d6e3f
+--- /dev/null
++++ b/pkg/reversesshfs/rooted_robust_test.go
+@@ -0,0 +1,115 @@
++//go:build linux || darwin || windows
++
++package reversesshfs
++
++import (
++	"os"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"testing"
++
++	"github.com/pkg/sftp"
++)
++
++// An opened directory renamed, with a symlink to a folder outside the root put in its place,
++// must not list the metadata of the files outside. (This holds because Go's File.Readdir stats
++// relative to the directory; go.mod requires a Go that does.)
++func TestRootedListNoEscape(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("no symlinks")
++	}
++	_, root, h := setupRootedHandlers(t, false)
++	outside := filepath.Join(filepath.Dir(root), "outside")
++	if err := os.Mkdir(filepath.Join(root, "d"), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	for _, f := range []struct{ path, content string }{
++		{filepath.Join(root, "d", "a"), "x"},
++		{filepath.Join(root, "d", "b"), "x"},
++		{filepath.Join(outside, "a"), strings.Repeat("secret", 100)},
++	} {
++		if err := os.WriteFile(f.path, []byte(f.content), 0o644); err != nil {
++			t.Fatal(err)
++		}
++	}
++	l, err := h.Filelist(sftp.NewRequest("List", filepath.Join(root, "d")))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer l.(interface{ Close() error }).Close()
++	if err := os.Rename(filepath.Join(root, "d"), filepath.Join(root, "d2")); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(outside, filepath.Join(root, "d")); err != nil {
++		t.Fatal(err)
++	}
++	ls := make([]os.FileInfo, 10)
++	n, _ := l.ListAt(ls, 0)
++	for _, fi := range ls[:n] {
++		if fi.Size() != 1 {
++			t.Errorf("%s: size %d, the metadata of a file outside the root", fi.Name(), fi.Size())
++		}
++	}
++}
++
++// The setuid, setgid and sticky bits are never set by the client.
++func TestRootedNoSpecialBits(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("no mode bits")
++	}
++	c, root, h := setupRootedHandlers(t, false)
++	p := func(s string) string { return filepath.Join(root, s) }
++	special := func(s string) os.FileMode {
++		t.Helper()
++		fi, err := os.Stat(p(s))
++		if err != nil {
++			t.Fatal(err)
++		}
++		return fi.Mode() & (os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
++	}
++	const mode = 0o7755
++	attrs := []byte{0, 0, byte(mode >> 8), byte(mode & 0xff)}
++
++	r := sftp.NewRequest("Put", p("src/open"))
++	r.Flags = 0x2 | 0x8 // write, creat
++	r.Attrs = attrs
++	f, err := h.openFile(r)
++	if err != nil {
++		t.Fatal(err)
++	}
++	f.Close()
++	if m := special("src/open"); m != 0 {
++		t.Errorf("open: %v", m)
++	}
++
++	if err := c.Chmod(p("src/main.go"), mode); err != nil {
++		t.Fatal(err)
++	}
++	if m := special("src/main.go"); m != 0 {
++		t.Errorf("chmod: %v", m)
++	}
++
++	hf, err := c.OpenFile(p("src/main.go"), os.O_RDWR)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := hf.Chmod(mode); err != nil {
++		t.Fatal(err)
++	}
++	hf.Close()
++	if m := special("src/main.go"); m != 0 {
++		t.Errorf("fchmod: %v", m)
++	}
++
++	// Mkdir takes its attributes through the sftp package; the handler applies them.
++	mk := sftp.NewRequest("Mkdir", p("src/dir"))
++	mk.Flags = 0x4 // permissions
++	mk.Attrs = append(make([]byte, 0, 4), attrs...)
++	if err := h.Filecmd(mk); err != nil {
++		t.Fatal(err)
++	}
++	if m := special("src/dir"); m != 0 {
++		t.Errorf("mkdir: %v", m)
++	}
++}
+diff --git a/pkg/reversesshfs/rooted_test.go b/pkg/reversesshfs/rooted_test.go
+index dd69d52..945d244 100644
+--- a/pkg/reversesshfs/rooted_test.go
++++ b/pkg/reversesshfs/rooted_test.go
 @@ -3,6 +3,7 @@
  package reversesshfs
  
@@ -223,7 +436,7 @@ diff -ruN a/pkg/reversesshfs/rooted_test.go b/pkg/reversesshfs/rooted_test.go
  	"io"
  	"os"
  	"path/filepath"
-@@ -339,6 +340,105 @@
+@@ -339,6 +340,105 @@ func TestRootedFsetstatReadHandle(t *testing.T) {
  	assertUnchanged(t, root)
  }
  
@@ -329,9 +542,10 @@ diff -ruN a/pkg/reversesshfs/rooted_test.go b/pkg/reversesshfs/rooted_test.go
  // sshfs sends its open flags with the permissions alone as attributes.
  func TestRootedOpenMode(t *testing.T) {
  	if runtime.GOOS == "windows" {
-diff -ruN a/pkg/reversesshfs/rooted_unix.go b/pkg/reversesshfs/rooted_unix.go
---- a/pkg/reversesshfs/rooted_unix.go	2026-10-02 22:17:21.654894025 +0200
-+++ b/pkg/reversesshfs/rooted_unix.go	2026-10-02 22:24:14.300702230 +0200
+diff --git a/pkg/reversesshfs/rooted_unix.go b/pkg/reversesshfs/rooted_unix.go
+index e9a71a8..9221504 100644
+--- a/pkg/reversesshfs/rooted_unix.go
++++ b/pkg/reversesshfs/rooted_unix.go
 @@ -3,6 +3,7 @@
  package reversesshfs
  
@@ -340,7 +554,7 @@ diff -ruN a/pkg/reversesshfs/rooted_unix.go b/pkg/reversesshfs/rooted_unix.go
  	"os"
  	"path"
  	"path/filepath"
-@@ -14,6 +15,9 @@
+@@ -14,6 +15,9 @@ import (
  
  var errDenied error = unix.EACCES
  
@@ -350,7 +564,7 @@ diff -ruN a/pkg/reversesshfs/rooted_unix.go b/pkg/reversesshfs/rooted_unix.go
  // appendWrite writes b at the end of f, which openFile opened with O_APPEND.
  // pwrite(2) would honor its offset on macOS.
  func appendWrite(f *os.File, b []byte) (int, error) {
-@@ -121,10 +125,20 @@
+@@ -121,10 +125,20 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
  		return nil, err
  	}
  	defer unix.Close(dirfd)
@@ -372,7 +586,16 @@ diff -ruN a/pkg/reversesshfs/rooted_unix.go b/pkg/reversesshfs/rooted_unix.go
  	return os.NewFile(uintptr(fd), r.Filepath), nil
  }
  
-@@ -181,6 +195,11 @@
+@@ -158,7 +172,7 @@ func (h *rootedHandlers) remove(r *sftp.Request) error {
+ func (h *rootedHandlers) mkdir(r *sftp.Request) error {
+ 	var mode uint32 = 0o755
+ 	if a := r.Attributes(); a != nil && r.AttrFlags().Permissions {
+-		mode = a.Mode & 0o7777
++		mode = a.Mode & permMask
+ 	}
+ 	return h.inParent("mkdir", r.Filepath, func(dirfd int, base string) error {
+ 		return unix.Mkdirat(dirfd, base, mode)
+@@ -181,6 +195,11 @@ func (h *rootedHandlers) link(r *sftp.Request) error {
  func (h *rootedHandlers) rename(r *sftp.Request, noReplace bool) error {
  	return h.twoPaths(r.Filepath, r.Target, func(oldfd int, oldBase string, newfd int, newBase string) error {
  		if noReplace {
@@ -384,9 +607,29 @@ diff -ruN a/pkg/reversesshfs/rooted_unix.go b/pkg/reversesshfs/rooted_unix.go
  			var st unix.Stat_t
  			if err := unix.Fstatat(newfd, newBase, &st, unix.AT_SYMLINK_NOFOLLOW); err == nil {
  				return os.ErrExist
-diff -ruN a/pkg/reversesshfs/rooted_unix_test.go b/pkg/reversesshfs/rooted_unix_test.go
---- a/pkg/reversesshfs/rooted_unix_test.go	1970-01-01 01:00:00.000000000 +0100
-+++ b/pkg/reversesshfs/rooted_unix_test.go	2026-10-02 22:24:14.300702230 +0200
+@@ -242,7 +261,7 @@ func (h *rootedHandlers) setstat(r *sftp.Request) error {
+ 		}
+ 	}
+ 	if flags.Permissions {
+-		if err := fchmodatNoFollow(dirfd, base, attrs.Mode&0o7777); err != nil {
++		if err := fchmodatNoFollow(dirfd, base, attrs.Mode&permMask); err != nil {
+ 			return &os.PathError{Op: "chmod", Path: r.Filepath, Err: err}
+ 		}
+ 	}
+@@ -277,7 +296,7 @@ func (h *rootedHandlers) fsetstat(f *os.File, r *sftp.Request) error {
+ 		}
+ 	}
+ 	if flags.Permissions {
+-		if err := unix.Fchmod(fd, attrs.Mode&0o7777); err != nil {
++		if err := unix.Fchmod(fd, attrs.Mode&permMask); err != nil {
+ 			return &os.PathError{Op: "chmod", Path: f.Name(), Err: err}
+ 		}
+ 	}
+diff --git a/pkg/reversesshfs/rooted_unix_test.go b/pkg/reversesshfs/rooted_unix_test.go
+new file mode 100644
+index 0000000..3067a7d
+--- /dev/null
++++ b/pkg/reversesshfs/rooted_unix_test.go
 @@ -0,0 +1,72 @@
 +//go:build linux || darwin
 +
@@ -460,10 +703,11 @@ diff -ruN a/pkg/reversesshfs/rooted_unix_test.go b/pkg/reversesshfs/rooted_unix_
 +		t.Fatalf("b: %q, %v", b, err)
 +	}
 +}
-diff -ruN a/pkg/reversesshfs/rooted_windows.go b/pkg/reversesshfs/rooted_windows.go
---- a/pkg/reversesshfs/rooted_windows.go	2026-10-02 22:17:21.654894025 +0200
-+++ b/pkg/reversesshfs/rooted_windows.go	2026-10-02 22:24:14.300702230 +0200
-@@ -15,6 +15,9 @@
+diff --git a/pkg/reversesshfs/rooted_windows.go b/pkg/reversesshfs/rooted_windows.go
+index c17dc25..94394a4 100644
+--- a/pkg/reversesshfs/rooted_windows.go
++++ b/pkg/reversesshfs/rooted_windows.go
+@@ -15,6 +15,9 @@ import (
  
  var errDenied error = windows.ERROR_ACCESS_DENIED
  
@@ -473,7 +717,7 @@ diff -ruN a/pkg/reversesshfs/rooted_windows.go b/pkg/reversesshfs/rooted_windows
  // appendWrite writes b at the end of f, as it is when the write happens.
  func appendWrite(f *os.File, b []byte) (int, error) {
  	var n uint32
-@@ -93,8 +96,37 @@
+@@ -93,8 +96,37 @@ func realPath(rootPath, p string) string {
  
  // writableName rejects backslashes, which are separators on Windows,
  // and colons, which name NTFS streams (e.g. .git::$INDEX_ALLOCATION, see CVE-2019-1352).
@@ -512,10 +756,11 @@ diff -ruN a/pkg/reversesshfs/rooted_windows.go b/pkg/reversesshfs/rooted_windows
  }
  
  func normalizedName(h windows.Handle) (string, error) {
-diff -ruN a/pkg/reversesshfs/rooted_windows_test.go b/pkg/reversesshfs/rooted_windows_test.go
---- a/pkg/reversesshfs/rooted_windows_test.go	2026-10-02 22:17:21.654894025 +0200
-+++ b/pkg/reversesshfs/rooted_windows_test.go	2026-10-02 22:24:14.300702230 +0200
-@@ -159,6 +159,20 @@
+diff --git a/pkg/reversesshfs/rooted_windows_test.go b/pkg/reversesshfs/rooted_windows_test.go
+index df0f179..78824d0 100644
+--- a/pkg/reversesshfs/rooted_windows_test.go
++++ b/pkg/reversesshfs/rooted_windows_test.go
+@@ -159,6 +159,20 @@ func TestRootedDeniesWindowsNames(t *testing.T) {
  	}
  }
  

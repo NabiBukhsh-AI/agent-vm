@@ -1,6 +1,7 @@
-diff -ruN a/pkg/portfwd/control_others.go b/pkg/portfwd/control_others.go
---- a/pkg/portfwd/control_others.go	2026-10-04 11:53:52.678873414 +0200
-+++ b/pkg/portfwd/control_others.go	2026-10-04 20:11:58.343028662 +0200
+diff --git a/pkg/portfwd/control_others.go b/pkg/portfwd/control_others.go
+index 723862d0..63306bef 100644
+--- a/pkg/portfwd/control_others.go
++++ b/pkg/portfwd/control_others.go
 @@ -6,11 +6,14 @@
  package portfwd
  
@@ -16,9 +17,10 @@ diff -ruN a/pkg/portfwd/control_others.go b/pkg/portfwd/control_others.go
  func Control(_, _ string, c syscall.RawConn) (err error) {
  	controlErr := c.Control(func(fd uintptr) {
  		err = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
-diff -ruN a/pkg/portfwd/control_windows.go b/pkg/portfwd/control_windows.go
---- a/pkg/portfwd/control_windows.go	2026-10-04 11:53:52.678873414 +0200
-+++ b/pkg/portfwd/control_windows.go	2026-10-04 20:12:02.031233813 +0200
+diff --git a/pkg/portfwd/control_windows.go b/pkg/portfwd/control_windows.go
+index 57b09cd9..96e796ea 100644
+--- a/pkg/portfwd/control_windows.go
++++ b/pkg/portfwd/control_windows.go
 @@ -4,20 +4,28 @@
  package portfwd
  
@@ -52,10 +54,11 @@ diff -ruN a/pkg/portfwd/control_windows.go b/pkg/portfwd/control_windows.go
 +func addrInUse(err error) bool {
 +	return errors.Is(err, windows.WSAEADDRINUSE) || errors.Is(err, windows.WSAEACCES)
 +}
-diff -ruN a/pkg/portfwd/forward.go b/pkg/portfwd/forward.go
---- a/pkg/portfwd/forward.go	2026-10-04 11:53:52.678873414 +0200
-+++ b/pkg/portfwd/forward.go	2026-10-04 20:12:48.903749557 +0200
-@@ -72,6 +72,20 @@
+diff --git a/pkg/portfwd/forward.go b/pkg/portfwd/forward.go
+index 7f80b5e5..cee8a000 100644
+--- a/pkg/portfwd/forward.go
++++ b/pkg/portfwd/forward.go
+@@ -72,6 +72,20 @@ func (fw *Forwarder) OnEvent(ctx context.Context, dialContext func(ctx context.C
  			}
  			continue
  		}
@@ -76,10 +79,11 @@ diff -ruN a/pkg/portfwd/forward.go b/pkg/portfwd/forward.go
  		logrus.Infof("Forwarding %s from %s to %s", strings.ToUpper(f.Protocol), remote, local)
  		fw.emitEvent(&events.PortForwardEvent{
  			Type:      events.PortForwardEventForwarding,
-diff -ruN a/pkg/portfwd/listener.go b/pkg/portfwd/listener.go
---- a/pkg/portfwd/listener.go	2026-10-04 11:53:52.678873414 +0200
-+++ b/pkg/portfwd/listener.go	2026-10-04 20:12:11.947011774 +0200
-@@ -70,6 +70,21 @@
+diff --git a/pkg/portfwd/listener.go b/pkg/portfwd/listener.go
+index a4e3203f..255a206f 100644
+--- a/pkg/portfwd/listener.go
++++ b/pkg/portfwd/listener.go
+@@ -70,6 +70,21 @@ func (p *ClosableListeners) Forward(ctx context.Context, dialContext func(ctx co
  	}
  }
  
@@ -101,10 +105,12 @@ diff -ruN a/pkg/portfwd/listener.go b/pkg/portfwd/listener.go
  func (p *ClosableListeners) Remove(_ context.Context, protocol, hostAddress, guestAddress string) {
  	logrus.Debugf("removing listener for hostAddress: %s, guestAddress: %s", hostAddress, guestAddress)
  	key := key(protocol, hostAddress, guestAddress)
-diff -ruN a/pkg/portfwd/probe.go b/pkg/portfwd/probe.go
---- a/pkg/portfwd/probe.go	1970-01-01 01:00:00.000000000 +0100
-+++ b/pkg/portfwd/probe.go	2026-10-04 20:11:56.766982422 +0200
-@@ -0,0 +1,60 @@
+diff --git a/pkg/portfwd/probe.go b/pkg/portfwd/probe.go
+new file mode 100644
+index 00000000..9062f27e
+--- /dev/null
++++ b/pkg/portfwd/probe.go
+@@ -0,0 +1,62 @@
 +// SPDX-FileCopyrightText: Copyright The Lima Authors
 +// SPDX-License-Identifier: Apache-2.0
 +
@@ -128,7 +134,9 @@ diff -ruN a/pkg/portfwd/probe.go b/pkg/portfwd/probe.go
 +// listening on 0.0.0.0:port: the guest would take the host's loopback clients
 +// of that program. Each address is bound and closed at once, with the same
 +// options as the forward (Control), so that only a socket bound to that exact
-+// address, not one in TIME_WAIT, counts.
++// address, not one in TIME_WAIT, counts. The wildcard addresses are bound too,
++// as a listener on them is not seen from the loopback ones: this may make
++// macOS's firewall ask once whether to accept incoming connections.
 +func inUse(ctx context.Context, protocol, hostAddress string) error {
 +	if filepath.IsAbs(hostAddress) {
 +		return nil
@@ -165,9 +173,11 @@ diff -ruN a/pkg/portfwd/probe.go b/pkg/portfwd/probe.go
 +	}
 +	return nil
 +}
-diff -ruN a/pkg/portfwd/probe_test.go b/pkg/portfwd/probe_test.go
---- a/pkg/portfwd/probe_test.go	1970-01-01 01:00:00.000000000 +0100
-+++ b/pkg/portfwd/probe_test.go	2026-10-04 20:12:34.014987620 +0200
+diff --git a/pkg/portfwd/probe_test.go b/pkg/portfwd/probe_test.go
+new file mode 100644
+index 00000000..421e61a9
+--- /dev/null
++++ b/pkg/portfwd/probe_test.go
 @@ -0,0 +1,66 @@
 +// SPDX-FileCopyrightText: Copyright The Lima Authors
 +// SPDX-License-Identifier: Apache-2.0

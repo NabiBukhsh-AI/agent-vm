@@ -1,7 +1,8 @@
-diff -ruN a/go.mod b/go.mod
---- a/go.mod	2026-10-04 11:53:55.434862520 +0200
-+++ b/go.mod	2026-10-04 17:33:43.990209375 +0200
-@@ -7,6 +7,7 @@
+diff --git a/go.mod b/go.mod
+index 252115b..1226b15 100644
+--- a/go.mod
++++ b/go.mod
+@@ -7,6 +7,7 @@ require (
  	github.com/sirupsen/logrus v1.9.4
  	github.com/urfave/cli/v2 v2.27.7
  	golang.org/x/sys v0.47.0
@@ -9,47 +10,253 @@ diff -ruN a/go.mod b/go.mod
  )
  
  require (
-diff -ruN a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
---- a/pkg/reversesshfs/rooted.go	2026-10-04 11:53:55.442949790 +0200
-+++ b/pkg/reversesshfs/rooted.go	2026-10-04 17:49:21.712368321 +0200
-@@ -13,6 +13,8 @@
- 	"time"
- 
- 	"github.com/pkg/sftp"
+diff --git a/pkg/reversesshfs/fold.go b/pkg/reversesshfs/fold.go
+new file mode 100644
+index 0000000..64c778e
+--- /dev/null
++++ b/pkg/reversesshfs/fold.go
+@@ -0,0 +1,52 @@
++package reversesshfs
++
++import (
++	"strings"
++	"unicode"
++
 +	"golang.org/x/text/cases"
 +	"golang.org/x/text/unicode/norm"
- )
- 
- // rootedHandlers serves only the files under rootPath.
-@@ -147,8 +149,15 @@
- 
- // sameName reports whether a file name may refer to the same entry as name
- // on a case-insensitive (APFS, HFS+, NTFS) file system.
--// The ignored code points are the ones listed in next_hfs_char() of git's utf8.c.
- func sameName(s, name string) bool {
-+	return foldName(s) == foldName(name)
++)
++
++// FoldName is s as a case-insensitive or normalization-insensitive file system compares it, or wider:
++// two names such a file system takes as one entry have the same FoldName.
++//
++// It drops the default-ignorable code points (HFS+ and the casefold feature of ext4, f2fs and tmpfs ignore
++// them; git's utf8.c has HFS+'s list), canonically decomposes (APFS, HFS+ and casefold ignore
++// normalization) and fully case-folds (APFS folds "ß" as "ss"). Dotless "ı" is "i", as in NTFS's
++// upcase table. Names that differ only in these ways are the same name here, even where the
++// host's file system keeps them apart: that only makes more paths protected.
++//
++// Not covered: a code point the file system's Unicode tables know and Go's do not (the kernel's are older),
++// and a volume with a customized NTFS upcase table. On Windows the protection does not rest on this
++// alone: handles are checked by their normalized names.
++func FoldName(s string) string {
++	if isPlainASCII(s) {
++		return strings.ToLower(s)
++	}
++	s = strings.Map(foldRune, s)
++	s = norm.NFD.String(cases.Fold().String(norm.NFD.String(s)))
++	return strings.Map(foldRune, s)
 +}
 +
-+// foldName is s as such a file system compares it, or wider: without the
-+// code points HFS+ ignores (those of next_hfs_char() in git's utf8.c), in
-+// canonical decomposition (APFS and HFS+ ignore normalization), and fully
-+// case-folded (APFS folds "ß" as "ss").
-+func foldName(s string) string {
- 	s = strings.Map(func(r rune) rune {
- 		switch {
- 		case r >= 0x200c && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x206a && r <= 0x206f, r == 0xfeff:
-@@ -156,7 +165,7 @@
++func isPlainASCII(s string) bool {
++	for i := 0; i < len(s); i++ {
++		if s[i] >= 0x80 {
++			return false
++		}
++	}
++	return true
++}
++
++// foldRune drops what is ignorable in a name, and maps dotless i.
++func foldRune(r rune) rune {
++	switch {
++	case r == 'ı':
++		return 'i'
++	case r < 0x80:
++		return r
++	case unicode.Is(unicode.Cf, r), unicode.Is(unicode.Variation_Selector, r), unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r):
++		return -1
++	}
++	return r
++}
+diff --git a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
+index d3d3a5b..d135e58 100644
+--- a/pkg/reversesshfs/rooted.go
++++ b/pkg/reversesshfs/rooted.go
+@@ -8,6 +8,7 @@ import (
+ 	"io"
+ 	"os"
+ 	"path"
++	"slices"
+ 	"strings"
+ 	"sync"
+ 	"time"
+@@ -28,6 +29,7 @@ type rootedHandlers struct {
+ 	root          *os.Root
+ 	readonly      bool
+ 	readonlyNames []string
++	foldedNames   []string // readonlyNames as FoldName gives them
+ 	rootedSys
+ 
+ 	mu           sync.Mutex
+@@ -58,6 +60,9 @@ func newRootedServer(rwc io.ReadWriteCloser, localPath string, readonly bool, re
+ 		rootedSys:     sys,
+ 		noopRemovals:  make(map[string]time.Time),
+ 	}
++	for _, n := range readonlyNames {
++		h.foldedNames = append(h.foldedNames, FoldName(n))
++	}
+ 	handlers := sftp.Handlers{FileGet: h, FilePut: h, FileCmd: h, FileList: h}
+ 	// Sequential, as OpenSSH's sftp-server: otherwise two writes to the same range, or a write
+ 	// and the FSTAT or FSETSTAT sent after it, can run in either order.
+@@ -136,27 +141,18 @@ func (h *rootedHandlers) writableRel(p string) (string, error) {
+ 
+ func (h *rootedHandlers) isReadonlyName(rel string) bool {
+ 	for _, c := range strings.Split(rel, "/") {
+-		for _, name := range h.readonlyNames {
+-			if sameName(c, name) {
+-				return true
+-			}
++		fc := FoldName(c)
++		if slices.Contains(h.foldedNames, fc) {
++			return true
  		}
- 		return r
- 	}, s)
+ 	}
+ 	return false
+ }
+ 
+ // sameName reports whether a file name may refer to the same entry as name
+-// on a case-insensitive (APFS, HFS+, NTFS) file system.
+-// The ignored code points are the ones listed in next_hfs_char() of git's utf8.c.
++// on a case-insensitive (APFS, HFS+, NTFS, casefold ext4) file system.
+ func sameName(s, name string) bool {
+-	s = strings.Map(func(r rune) rune {
+-		switch {
+-		case r >= 0x200c && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x206a && r <= 0x206f, r == 0xfeff:
+-			return -1
+-		}
+-		return r
+-	}, s)
 -	return strings.EqualFold(s, name)
-+	return norm.NFD.String(cases.Fold().String(norm.NFD.String(s)))
++	return FoldName(s) == FoldName(name)
  }
  
  // Fileread implements sftp.FileReader.
-diff -ruN a/pkg/reversesshfs/rooted_fuzz_test.go b/pkg/reversesshfs/rooted_fuzz_test.go
---- a/pkg/reversesshfs/rooted_fuzz_test.go	1970-01-01 01:00:00.000000000 +0100
-+++ b/pkg/reversesshfs/rooted_fuzz_test.go	2026-10-04 17:39:52.791101790 +0200
+diff --git a/pkg/reversesshfs/rooted_casefold_linux_test.go b/pkg/reversesshfs/rooted_casefold_linux_test.go
+new file mode 100644
+index 0000000..e81abec
+--- /dev/null
++++ b/pkg/reversesshfs/rooted_casefold_linux_test.go
+@@ -0,0 +1,61 @@
++//go:build linux
++
++package reversesshfs
++
++import (
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++// Every spelling of ".git" that a casefold directory (ext4, f2fs, tmpfs with the feature) takes as
++// the same entry is the same name for sameName. The directory is made under $CASEFOLD_DIR, or the
++// temporary folder; the test is skipped where that is not a file system with the feature.
++// To get one: mke2fs -t ext4 -O casefold -E encoding=utf8 image, mounted.
++func TestSameNameCasefold(t *testing.T) {
++	if testing.Short() {
++		t.Skip("short")
++	}
++	base := os.Getenv("CASEFOLD_DIR")
++	if base == "" {
++		base = t.TempDir()
++	}
++	dir := filepath.Join(base, "cf")
++	if err := os.MkdirAll(dir, 0o755); err != nil {
++		t.Skip(err)
++	}
++	t.Cleanup(func() { os.RemoveAll(dir) })
++	if out, err := exec.Command("chattr", "+F", dir).CombinedOutput(); err != nil {
++		t.Skipf("no casefold directory here: %v: %s", err, out)
++	}
++	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := os.Lstat(filepath.Join(dir, ".GIT")); err != nil {
++		t.Skip("the directory is case sensitive")
++	}
++	var found int
++	for r := rune(0x80); r <= 0x10ffff; r++ {
++		if r >= 0xd800 && r <= 0xdfff {
++			continue
++		}
++		s := string(r)
++		for _, name := range []string{".g" + s + "it", ".gi" + s + "t", ".git" + s, s + ".git", s + "git", ".g" + s + "t", ".gi" + s, "." + s + "it"} {
++			if strings.Contains(name, "/") {
++				continue
++			}
++			if _, err := os.Lstat(filepath.Join(dir, name)); err != nil {
++				continue
++			}
++			found++
++			if !sameName(name, ".git") {
++				t.Errorf("%+q is .git on this file system, and sameName says it is not", name)
++			}
++		}
++	}
++	if found == 0 {
++		t.Error("no spelling found: the test does not reach the file system")
++	}
++}
+diff --git a/pkg/reversesshfs/rooted_fold_test.go b/pkg/reversesshfs/rooted_fold_test.go
+new file mode 100644
+index 0000000..f6c8bb1
+--- /dev/null
++++ b/pkg/reversesshfs/rooted_fold_test.go
+@@ -0,0 +1,48 @@
++//go:build linux || darwin || windows
++
++package reversesshfs
++
++import (
++	"testing"
++)
++
++func TestFoldNameIgnorables(t *testing.T) {
++	// Spellings that a casefold ext4, f2fs or tmpfs, or HFS+, takes as ".git".
++	for _, r := range []rune{
++		0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202e, 0x2060, 0x2061, 0x2064, 0x206a, 0x206f, 0xfeff,
++		0xad, 0x34f, 0x61c, 0x115f, 0x1160, 0x17b4, 0x17b5, 0x180b, 0x180e, 0x180f, 0x3164, 0xfe00, 0xfe0f, 0xffa0,
++		0xfff0, 0xe0001, 0xe0020, 0xe0100, 0xe01ef,
++	} {
++		s := string(r)
++		for _, name := range []string{".g" + s + "it", ".gi" + s + "t", ".git" + s, s + ".git", ".GIT" + s} {
++			if !sameName(name, ".git") {
++				t.Errorf("%+q should match .git", name)
++			}
++		}
++	}
++	// Dotless i is "i" in NTFS's upcase table; long s folds to s.
++	if !sameName(".gıt", ".git") || !sameName("ſrc", "src") {
++		t.Error("dotless i or long s")
++	}
++	for _, name := range []string{".gt", ".gitt", ".gi.t", ".ǵit", ".g it"} {
++		if sameName(name, ".git") {
++			t.Errorf("%+q should not match .git", name)
++		}
++	}
++}
++
++func FuzzFoldIgnorables(f *testing.F) {
++	for _, s := range []string{".git", ".g​it", "Aㅤb", "é", "é"} {
++		f.Add(s, uint8(1))
++	}
++	f.Fuzz(func(t *testing.T, s string, at uint8) {
++		// An ignorable code point anywhere changes nothing.
++		i := int(at) % (len(s) + 1)
++		for i > 0 && i < len(s) && s[i]&0xc0 == 0x80 {
++			i--
++		}
++		if got, want := FoldName(s[:i]+"​️ㅤ"+s[i:]), FoldName(s); got != want {
++			t.Errorf("FoldName(%q with ignorables at %d) = %q, want %q", s, i, got, want)
++		}
++	})
++}
+diff --git a/pkg/reversesshfs/rooted_fuzz_test.go b/pkg/reversesshfs/rooted_fuzz_test.go
+new file mode 100644
+index 0000000..cd328e9
+--- /dev/null
++++ b/pkg/reversesshfs/rooted_fuzz_test.go
 @@ -0,0 +1,196 @@
 +//go:build linux || darwin || windows
 +
@@ -247,10 +454,11 @@ diff -ruN a/pkg/reversesshfs/rooted_fuzz_test.go b/pkg/reversesshfs/rooted_fuzz_
 +		}
 +	})
 +}
-diff -ruN a/pkg/reversesshfs/rooted_test.go b/pkg/reversesshfs/rooted_test.go
---- a/pkg/reversesshfs/rooted_test.go	2026-10-04 11:53:55.442949790 +0200
-+++ b/pkg/reversesshfs/rooted_test.go	2026-10-04 17:33:48.612190703 +0200
-@@ -678,4 +678,16 @@
+diff --git a/pkg/reversesshfs/rooted_test.go b/pkg/reversesshfs/rooted_test.go
+index 945d244..01fe96a 100644
+--- a/pkg/reversesshfs/rooted_test.go
++++ b/pkg/reversesshfs/rooted_test.go
+@@ -678,4 +678,16 @@ func TestSameName(t *testing.T) {
  			t.Errorf("%q should not match .git", s)
  		}
  	}
@@ -267,9 +475,11 @@ diff -ruN a/pkg/reversesshfs/rooted_test.go b/pkg/reversesshfs/rooted_test.go
 +		}
 +	}
  }
-diff -ruN a/pkg/reversesshfs/testdata/fuzz/FuzzRootedOps/4bd352fd398dba68 b/pkg/reversesshfs/testdata/fuzz/FuzzRootedOps/4bd352fd398dba68
---- a/pkg/reversesshfs/testdata/fuzz/FuzzRootedOps/4bd352fd398dba68	1970-01-01 01:00:00.000000000 +0100
-+++ b/pkg/reversesshfs/testdata/fuzz/FuzzRootedOps/4bd352fd398dba68	2026-10-04 17:49:16.349599968 +0200
+diff --git a/pkg/reversesshfs/testdata/fuzz/FuzzRootedOps/4bd352fd398dba68 b/pkg/reversesshfs/testdata/fuzz/FuzzRootedOps/4bd352fd398dba68
+new file mode 100644
+index 0000000..ba58ab5
+--- /dev/null
++++ b/pkg/reversesshfs/testdata/fuzz/FuzzRootedOps/4bd352fd398dba68
 @@ -0,0 +1,2 @@
 +go test fuzz v1
 +[]byte("7A00")
