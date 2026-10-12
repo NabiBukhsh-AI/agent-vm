@@ -42,6 +42,9 @@ func TestInfo(t *testing.T) {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	os.Unsetenv("GIT_CONFIG_GLOBAL")
 	os.Unsetenv("XDG_CONFIG_HOME")
+	// On Windows the temporary folder is under LOCALAPPDATA, which no project may be in.
+	t.Setenv("APPDATA", "")
+	t.Setenv("LOCALAPPDATA", "")
 	os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[safe]\n\tbareRepository = explicit\n"), 0o644)
 	// Host-spelled, as AbsDir spells info's folders.
 	proj := paths.Host(filepath.Join(home, "proj"))

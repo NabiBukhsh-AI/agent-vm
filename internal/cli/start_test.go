@@ -66,6 +66,9 @@ func newStartEnv(t *testing.T, answers ...string) *startEnv {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	os.Unsetenv("GIT_CONFIG_GLOBAL")
 	os.Unsetenv("XDG_CONFIG_HOME")
+	// On Windows the temporary folder is under LOCALAPPDATA, which no project may be in.
+	t.Setenv("APPDATA", "")
+	t.Setenv("LOCALAPPDATA", "")
 	t.Setenv("AGENT_VM_UNSAFE_WRITABLE_GIT", "")
 	t.Setenv("AGENT_VM_UNSAFE_DISABLE_SECURITY_PROMPTS", "")
 	t.Setenv("AGENT_VM_SSHFS_CACHE", "")
