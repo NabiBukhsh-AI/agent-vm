@@ -15,7 +15,10 @@ import (
 // agent-vm takes every VM in its Lima home as its own (list, rm,
 // destroy-all): never the user's own Lima home, however spelled.
 func TestOwnLimaHome(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Go reads the home from USERPROFILE on Windows, not HOME.
+	t.Setenv("USERPROFILE", home)
 	lima := t.TempDir()
 	t.Setenv("LIMA_HOME", lima)
 	t.Setenv("AGENT_VM_LIMA_HOME", lima+"/")
@@ -42,7 +45,10 @@ func TestOwnLimaHome(t *testing.T) {
 // running ones (an editor calls info unasked); a command that changes VMs
 // does.
 func TestMigrateNotFromReaders(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Go reads the home from USERPROFILE on Windows, not HOME.
+	t.Setenv("USERPROFILE", home)
 	for _, args := range [][]string{{"doctor"}, {"info"}, {"list"}, {"stop", "x"}} {
 		te := newTestEnv(t, vmtest.New())
 		moved := false

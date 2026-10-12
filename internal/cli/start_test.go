@@ -61,6 +61,8 @@ func newStartEnv(t *testing.T, answers ...string) *startEnv {
 	// separators never compare on Windows.
 	home = paths.Host(home)
 	t.Setenv("HOME", home)
+	// Go reads the home from USERPROFILE on Windows, not HOME.
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	os.Unsetenv("GIT_CONFIG_GLOBAL")
 	os.Unsetenv("XDG_CONFIG_HOME")

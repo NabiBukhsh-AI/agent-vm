@@ -110,6 +110,7 @@ check "sshfs wrapper: an older sshfs gets the arguments unchanged" \
 # config (managed settings, MCP servers) is written. The lines setup derives
 # it with, run as setup does.
 has_block="$(awk '/^HAS_CLAUDE=0 HAS_CODEX=0 HAS_VIBE=0$/,/HAS_VIBE=1$/' "$SETUP_SH")"
+# shellcheck disable=SC2034 # read by the eval'd block
 has() { ( INSTALL_CLAUDE="$1" INSTALL_CODE_CLAUDE="$2" INSTALL_CODEX="$3" INSTALL_CODE_CODEX="$4" INSTALL_VIBE="$5" INSTALL_CODE_VIBE="$6"
           eval "$has_block"; echo "$HAS_CLAUDE$HAS_CODEX$HAS_VIBE" ); }
 check "setup: the agents' config, for a command or an extension" \
@@ -157,6 +158,7 @@ if ! command -v jq >/dev/null 2>&1; then
   printf '  skip Pi install tests (jq not installed)\n'
 else
   pi_block="$(awk '/^if \[\[ "\$INSTALL_PI" == "1" \]\]; then/,/^fi$/' "$SETUP_SH")"
+  # shellcheck disable=SC2034 # read by the eval'd block
   run_pi_block() {
     ( HOME="$1"; INSTALL_PI=1 INSTALL_NODE="$2"
       sudo() { echo "sudo $*" >> "$HOME/sudo.log"; }
@@ -255,6 +257,7 @@ $(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
   # Under set -e, as the script runs: a failing step must show here. Twice:
   # what it writes must not pile up when it runs again in the same VM. The
   # first run's state is kept in <home>/first.
+  # shellcheck disable=SC2034 # read by the eval'd block
   run_cs_block() {
     mkdir -p "$1/.config/code-server"; echo "password: from-the-base" > "$1/.config/code-server/config.yaml"
     ( set -e
@@ -269,7 +272,7 @@ $(awk '/^configure_mcp\(\) \{/,/^\}/' "$SETUP_SH")"
       configure_mcp chrome-devtools npx -y chrome-devtools-mcp@latest
       eval "$cs_block"
       configure_mcp chrome-devtools npx -y chrome-devtools-mcp@latest
-      echo done > "$HOME/finished" ) >/dev/null 2>&1
+      echo 'done' > "$HOME/finished" ) >/dev/null 2>&1
   }
   CSB="$SB/cs-bare"; mkdir -p "$CSB"
   run_cs_block "$CSB" 0 0 0

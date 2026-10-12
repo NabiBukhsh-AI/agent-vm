@@ -37,6 +37,8 @@ func TestInfo(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Go reads the home from USERPROFILE on Windows, not HOME.
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	os.Unsetenv("GIT_CONFIG_GLOBAL")
 	os.Unsetenv("XDG_CONFIG_HOME")
