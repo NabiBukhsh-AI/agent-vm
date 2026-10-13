@@ -19,15 +19,16 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: www
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
           cache: npm
@@ -49,15 +50,19 @@ jobs:
         # does not fail the build, it just quietly serves the github.io URL.
         run: test -f dist/CNAME
 
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: www/dist
 
   deploy:
-    # A pull request builds but does not publish.
-    if: github.event_name != 'pull_request'
+    # Only main publishes: a pull request builds only, and a manual run
+    # (workflow_dispatch) from another branch would otherwise deploy that
+    # branch's site. The github-pages environment should restrict deployment
+    # branches to main too (RELEASING.md).
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # On the deploy job only: at workflow level, a pull request build would
     # share the group and replace a pending deploy. The in-progress deploy is
     # never cancelled; a newer pending one replaces an older pending one.
@@ -72,4 +77,4 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - id: deploy
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5

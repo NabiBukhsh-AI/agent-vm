@@ -1,6 +1,5 @@
 ---
 import CodeBlock from './CodeBlock.astro';
-import Roadmap from './Roadmap.astro';
 import { inline } from '../lib/inline';
 import Heading from './Heading.astro';
 import { slug } from '../lib/slug';
@@ -22,8 +21,6 @@ const d = t(locale);
       <Heading as="h2" id="contribute" own={false} locale={locale}>{d.contribute.title}</Heading>
       <p class="lede" set:html={inline(d.contribute.lede)} />
     </div>
-
-    <Roadmap locale={locale} />
 
     <div class="contribute__grid">
       <div class="contribute__col">

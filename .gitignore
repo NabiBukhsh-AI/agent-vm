@@ -2,3 +2,13 @@
 .claude
 node_modules
 dist
+/_output
+# Scratch checkouts and patch files for working on patches/. third_party/
+# holds what is built.
+/lima/
+/lima-pr/
+/tmp/
+/sshocker-append-fix.patch
+# Built by the Makefile, embedded in the binary.
+/internal/limaembed/assets/*
+!/internal/limaembed/assets/README
