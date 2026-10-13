@@ -12,9 +12,9 @@
 GO ?= go
 GOOS ?= $(shell $(GO) env GOOS)
 GOARCH ?= $(shell $(GO) env GOARCH)
-# The tag when HEAD has one, else the next release's: a build of the 0.3
-# branch is 0.3.0-dev, not 0.2.0-N after the last tag (version --min).
-NEXT_VERSION := 0.3.0
+# The tag when HEAD has one, else the next release's: a build after 0.3.0 is
+# 0.3.1-dev, not 0.3.0-N after the last tag (version --min).
+NEXT_VERSION := 0.3.1
 VERSION ?= $(shell t=$$(git describe --tags --match 'v[0-9]*' --exact-match --dirty=.m 2>/dev/null) && echo "$$t" | sed 's/^v//' || \
 	echo "$(NEXT_VERSION)-dev.$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)")
 LIMA_VERSION := $(shell awk '$$1 == "lima" { print $$4 }' third_party/SOURCES)

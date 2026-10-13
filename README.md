@@ -50,7 +50,7 @@ make check-third-party test-third-party    # Lima, sshocker, pkg/sftp, gvisor-ta
 make fuzz FUZZTIME=5m                      # each fuzzer; their seeds run with the tests
 ```
 
-Releases: [RELEASING.md](RELEASING.md). Plan: [PLAN_0.3.0.md](PLAN_0.3.0.md). The website is in [`www/`](www/README.md). Changes: [CHANGELOG.md](CHANGELOG.md).
+Releases: [RELEASING.md](RELEASING.md). The website is in [`www/`](www/README.md). Changes: [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

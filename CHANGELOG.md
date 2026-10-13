@@ -1,8 +1,10 @@
 # Changelog
 
+## Unreleased
+
 ## 0.3.0
 
-agent-vm 0.3 is one Go binary with Lima built in (see PLAN_0.3.0.md). The
+agent-vm 0.3 is one Go binary with Lima built in. The
 bash version (`agent-vm.sh`, `lib/`) is gone from the repository: 0.2.x
 stays on its tags. Changes against 0.2.1:
 
