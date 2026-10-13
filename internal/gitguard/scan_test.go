@@ -58,6 +58,21 @@ func (b *box) git(dir string, args ...string) {
 	}
 }
 
+// setRaw sets a key of the project's config by writing the file: on macOS git
+// precomposes the arguments it is given, which would turn a decomposed
+// spelling into the composed one.
+func (b *box) setRaw(section, key, value string) {
+	b.t.Helper()
+	f, err := os.OpenFile(b.proj+"/.git/config", os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("[" + section + "]\n\t" + key + " = \"" + value + "\"\n"); err != nil {
+		b.t.Fatal(err)
+	}
+}
+
 func (b *box) write(p, content string) {
 	os.MkdirAll(filepath.Dir(p), 0o755)
 	os.WriteFile(p, []byte(content), 0o755)

@@ -187,7 +187,11 @@ func TestScanHooksPathVariants(t *testing.T) {
 	} {
 		b := newBox(t)
 		v := strings.ReplaceAll(c.value, "PROJ", b.proj)
-		b.git(b.proj, "config", "core.hooksPath", v)
+		if v == nfd {
+			b.setRaw("core", "hooksPath", v)
+		} else {
+			b.git(b.proj, "config", "core.hooksPath", v)
+		}
 		r := b.scan()
 		got := strings.Join(r.Hooks, "\n")
 		if got != c.want {
@@ -197,7 +201,7 @@ func TestScanHooksPathVariants(t *testing.T) {
 	// Names: the folder's first component as spelled, so that the server,
 	// which compares names as the file system does, keeps every spelling.
 	b := newBox(t)
-	b.git(b.proj, "config", "core.hooksPath", nfd)
+	b.setRaw("core", "hooksPath", nfd)
 	if names := b.scan().Names(); !slices.Contains(names, "e\xcc\x81cole") {
 		t.Errorf("names: %q", names)
 	}
@@ -215,7 +219,7 @@ func TestScanHooksPathVariants(t *testing.T) {
 func TestRisksNameSpellings(t *testing.T) {
 	b := newBox(t)
 	b.git(b.proj, "config", "core.fsmonitor", "Tools/run.sh")
-	b.git(b.proj, "config", "core.pager", "e\xcc\x81cole/run.sh")
+	b.setRaw("core", "pager", "e\xcc\x81cole/run.sh")
 	r := b.scan()
 	got := strings.Join(r.Risks([]string{".git", ".hg", "tools", "\xc3\xa9cole"}), "\n")
 	if strings.Contains(got, "fsmonitor") {

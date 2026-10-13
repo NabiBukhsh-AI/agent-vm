@@ -124,6 +124,10 @@ func TestAskDarwin(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake(t, "osascript", c.script)
+			if c.script == "" {
+				// The real osascript lives in /usr/bin and would show a dialog.
+				t.Setenv("PATH", t.TempDir())
+			}
 			allow, ok := Ask(context.Background(), "t", "m")
 			if (want{allow, ok}) != c.want {
 				t.Errorf("got allow=%v ok=%v, want %v", allow, ok, c.want)
