@@ -85,7 +85,10 @@ valid_version() {
 }
 
 # The "## X.Y.Z" section of CHANGELOG.md, without its heading and without
-# leading or trailing blank lines. Empty when there is none.
+# leading or trailing blank lines. Empty when there is none. The file is
+# wrapped for reading in a terminal, GitHub is not: a paragraph or list item
+# continued on the next lines is joined into one line. Code fences, headings,
+# tables and quotes are left as written.
 changelog_notes() {
   awk -v v="$1" '
     /^## / { if (inside) exit; inside = ($2 == v); next }
@@ -93,7 +96,22 @@ changelog_notes() {
     END {
       first = 1; while (first <= n && lines[first] ~ /^[ \t]*$/) first++
       last = n;  while (last >= first && lines[last] ~ /^[ \t]*$/) last--
-      for (i = first; i <= last; i++) print lines[i]
+      for (i = first; i <= last; i++) {
+        l = lines[i]
+        if (fence) { print l; if (l ~ /^[ \t]*(```|~~~)/) fence = 0; continue }
+        if (l ~ /^[ \t]*(```|~~~)/ || l ~ /^[ \t]*$/) {
+          if (joinable) printf "\n"
+          print l; joinable = 0; fence = (l ~ /[`~]/); continue
+        }
+        if (joinable && l !~ /^[ \t]*([-*+]|[0-9]+[.)])[ \t]/ && l !~ /^[ \t]*[#|>]/) {
+          sub(/^[ \t]+/, "", l); printf " %s", l; continue
+        }
+        if (joinable) printf "\n"
+        printf "%s", l
+        joinable = (l !~ /^[ \t]*[#|>]/)
+        if (!joinable) printf "\n"
+      }
+      if (joinable) printf "\n"
     }
   ' "$REPO_DIR/CHANGELOG.md"
 }

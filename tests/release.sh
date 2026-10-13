@@ -44,6 +44,26 @@ check "notes: only that version's section" "$("$SB/notes/release.sh" notes 2.0.0
 check "notes: the last section too" "$("$SB/notes/release.sh" notes 1.0.0)" "- one"
 "$SB/notes/release.sh" notes 3.0.0 >/dev/null 2>&1
 check "notes: an absent version fails" "$?" "1"
+# Wrapped for the terminal, joined for GitHub: items and paragraphs become one
+# line each, headings, fences, tables and sub-items stay as written.
+printf '# Changelog\n\n## 4.0.0\n\nIntro line one\ncontinued here.\n\n### Added\n\n- first item\n  continued\n  and again\n- second item\n  - sub item\n    wrapped\n\n```\nkept\n  as is\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n## 3.0.0\n\n- old\n' > "$SB/notes/CHANGELOG.md"
+want='Intro line one continued here.
+
+### Added
+
+- first item continued and again
+- second item
+  - sub item wrapped
+
+```
+kept
+  as is
+```
+
+| a | b |
+|---|---|
+| 1 | 2 |'
+check "notes: wrapped lines are joined, the rest is kept" "$("$SB/notes/release.sh" notes 4.0.0)" "$want"
 "$SELF_DIR/release.sh" 1.2 >/dev/null 2>&1
 check "a malformed version is refused before anything else" "$?" "1"
 "$SELF_DIR/release.sh" >/dev/null 2>&1
