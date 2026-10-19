@@ -143,6 +143,29 @@ func TestStartNewVM(t *testing.T) {
 	}
 }
 
+// A VM left running without Lima's hostagent is stopped by force, then
+// started again.
+func TestStartOrphaned(t *testing.T) {
+	se := newStartEnv(t)
+	se.base()
+	name := vmname.Name(se.proj)
+	if code := se.run("run", "true"); code != 0 {
+		t.Fatalf("run: %d %s", code, se.out())
+	}
+	v := se.fake.VMs[name]
+	v.Status, v.Orphaned = vm.Broken, true
+	if se.run("run", "true") != 0 || !strings.Contains(se.out(), "left running without Lima's host agent") ||
+		!strings.HasPrefix(se.fake.CallLog(), "stop "+name) || !strings.Contains(se.fake.CallLog(), "start "+name) || v.Status != vm.Running {
+		t.Errorf("orphaned: %s\n%s", se.out(), se.fake.CallLog())
+	}
+	// One that does not stop: no start.
+	v.Status, v.Orphaned = vm.Broken, true
+	se.fake.Sticky[name] = true
+	if se.run("run", "true") != 1 || !strings.Contains(se.out(), "could not stop VM") || strings.Contains(se.fake.CallLog(), "start") {
+		t.Errorf("orphaned, stop failed: %s\n%s", se.out(), se.fake.CallLog())
+	}
+}
+
 // The resources asked against the VM's: in bytes, the disk one way (it
 // only grows), a VM that cannot be read counts as a change.
 func TestResourcesDiffer(t *testing.T) {

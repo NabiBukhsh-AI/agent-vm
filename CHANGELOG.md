@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
+
+### Added
+
+- Releases have a `.deb` and an `.rpm` for Linux (amd64, arm64): the binary in
+  `/usr/bin` and the docs, with QEMU and ssh recommended. Not in a package
+  repository yet: install the file with `apt install ./agent-vm_X.Y.Z_arm64.deb`
+  or `dnf install ./agent-vm-X.Y.Z-1.aarch64.rpm`.
+- A Nix flake (Linux): `nix run github:sylvinus/agent-vm`. QEMU comes with it,
+  ssh is the system's.
+
+### Fixed
+
+- Linux: VMs turned Broken seconds to minutes after a start. The end of the
+  agent-vm command that started a VM (closing its terminal, a kill, and at
+  random a plain exit) killed Lima's host agent, which left QEMU running
+  without it, cut off, and failing every later start. The host agent now
+  outlives that command. On macOS, the same killed the VM.
+- A VM left in that state is stopped by force, then started again, on the
+  next run; `agent-vm stop` stops it too. `stop` no longer says "VM stopped."
+  for a Broken VM it did not stop.
 
 ## 0.3.0
 

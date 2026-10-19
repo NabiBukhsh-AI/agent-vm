@@ -291,7 +291,9 @@ func StartWithPaths(ctx context.Context, inst *limatype.Instance, launchHostAgen
 			args = append(args, "--progress")
 		}
 		args = append(args, inst.Name)
-		haCmd = exec.CommandContext(ctx, limactl, args...)
+		// Not exec.CommandContext: the hostagent outlives this call, and os/exec
+		// would kill it whenever ctx ends, even after Start returned.
+		haCmd = exec.Command(limactl, args...)
 
 		haCmd.SysProcAttr = executil.BackgroundSysProcAttr
 

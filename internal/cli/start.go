@@ -416,6 +416,19 @@ func (s *start) ensureRunningLocked() error {
 	if !o.Reset && s.configErr(inst) {
 		return errStop
 	}
+	// Lima's hostagent died under it: the VM is cut off, and blocks its next
+	// start.
+	if inst != nil && inst.Orphaned {
+		s.warnf("Warning: VM '%s' was left running without Lima's host agent, cut off: stopping it.", s.name)
+		if !s.stopVM(s.ctx, s.name) {
+			s.warnf("Error: could not stop VM '%s'. See 'agent-vm list'.", s.name)
+			return errStop
+		}
+		if inst, err = s.get(s.name); err != nil {
+			s.warnf("Error: could not query Lima: %v", err)
+			return errStop
+		}
+	}
 	if o.Reset && inst != nil {
 		fmt.Fprintf(s.io.Stdout, "Resetting VM '%s'...\n", s.name)
 		if !s.deleteVM(s.ctx, s.name) {

@@ -75,7 +75,7 @@ func (e *app) stopVM(ctx context.Context, name string) bool {
 	}
 	_ = b.Stop(ctx, name)
 	inst, err := b.Get(ctx, name)
-	return err == nil && inst.Status != vm.Running
+	return err == nil && inst.Status == vm.Stopped
 }
 
 func (e *app) rmCmd(ctx context.Context, args []string) int {
