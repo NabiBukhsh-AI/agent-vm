@@ -332,7 +332,7 @@ index 5a68db80..d675c763 100644
  	if err != nil {
 diff --git a/pkg/networks/usernet/dgram_test.go b/pkg/networks/usernet/dgram_test.go
 new file mode 100644
-index 00000000..1fe698df
+index 00000000..01782a14
 --- /dev/null
 +++ b/pkg/networks/usernet/dgram_test.go
 @@ -0,0 +1,82 @@
@@ -410,7 +410,7 @@ index 00000000..1fe698df
 +
 +	// The connection ends with the netstack's context.
 +	cancel()
-+	assert.NilError(t, peer.SetReadDeadline(time.Now().Add(10*time.Second)))
++	assert.NilError(t, peer.SetWriteDeadline(time.Now().Add(10*time.Second)))
 +	_, err = peer.Write(arp)
 +	for i := 0; err == nil && i < 100; i++ {
 +		time.Sleep(50 * time.Millisecond)

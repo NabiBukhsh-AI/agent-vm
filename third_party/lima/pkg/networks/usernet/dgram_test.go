@@ -72,7 +72,7 @@ func TestDgramConn(t *testing.T) {
 
 	// The connection ends with the netstack's context.
 	cancel()
-	assert.NilError(t, peer.SetReadDeadline(time.Now().Add(10*time.Second)))
+	assert.NilError(t, peer.SetWriteDeadline(time.Now().Add(10*time.Second)))
 	_, err = peer.Write(arp)
 	for i := 0; err == nil && i < 100; i++ {
 		time.Sleep(50 * time.Millisecond)

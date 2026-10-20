@@ -35,6 +35,11 @@ contents:
   - src: runtime.example.sh
     dst: /usr/share/doc/agent-vm/runtime.example.sh
 
+# The RPM records the build host's name: fixed, so that the same commit gives
+# the same RPM on any machine.
+rpm:
+  buildhost: agent-vm
+
 overrides:
   deb:
     recommends:
