@@ -69,38 +69,49 @@ type LimaQemuDriver struct {
 
 // startUsernet starts the instance's own gvisor netstack, as vz does: one
 // network per instance, in the hostagent, where usernet.Outbound applies.
-func startUsernet(ctx context.Context, inst *limatype.Instance) (client *usernet.Client, qemuSock string, stop context.CancelFunc, err error) {
+//
+// QEMU reaches it through qemuDgram (its dgram netdev) when it has one, and
+// qemuSock otherwise (see Cmdline). qemuDgram is nil on Windows.
+func startUsernet(ctx context.Context, inst *limatype.Instance) (client *usernet.Client, qemuSock string, qemuDgram *os.File, stop context.CancelFunc, err error) {
 	endpointSock, err := usernet.SockWithDirectory(inst.Dir, "", usernet.EndpointSock)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	qemuSock, err = usernet.SockWithDirectory(inst.Dir, "", usernet.QEMUSock)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	os.RemoveAll(endpointSock)
 	os.RemoveAll(qemuSock)
+	dgramConn, qemuDgram, err := dgramPair()
+	if err != nil && !errors.Is(err, errors.ErrUnsupported) {
+		return nil, "", nil, nil, err
+	}
 	ctx, stop = context.WithCancel(ctx)
 	err = usernet.StartGVisorNetstack(ctx, &usernet.GVisorNetstackOpts{
 		MTU:        1500,
 		Endpoint:   endpointSock,
 		QemuSocket: qemuSock,
+		DgramConn:  dgramConn,
 		Async:      true,
 		DefaultLeases: map[string]string{
 			networks.SlirpIPAddress: limayaml.MACAddress(inst.Dir),
 		},
 		Subnet: networks.SlirpNetwork,
 	})
-	if err != nil {
-		stop()
-		return nil, "", nil, err
+	if err == nil {
+		var subnetIP net.IP
+		subnetIP, _, err = net.ParseCIDR(networks.SlirpNetwork)
+		if err == nil {
+			return usernet.NewClient(endpointSock, subnetIP), qemuSock, qemuDgram, stop, nil
+		}
 	}
-	subnetIP, _, err := net.ParseCIDR(networks.SlirpNetwork)
-	if err != nil {
-		stop()
-		return nil, "", nil, err
+	stop()
+	if dgramConn != nil {
+		dgramConn.Close()
+		qemuDgram.Close()
 	}
-	return usernet.NewClient(endpointSock, subnetIP), qemuSock, stop, nil
+	return nil, "", nil, nil, err
 }
 
 var _ driver.Driver = (*LimaQemuDriver)(nil)
@@ -366,12 +377,16 @@ func (l *LimaQemuDriver) Start(ctx context.Context) (chan error, error) {
 		VirtioGA:     l.virtioPort != "",
 	}
 	if limayaml.FirstUsernetIndex(l.Instance.Config) == -1 {
-		client, sock, stop, err := startUsernet(ctx, l.Instance)
+		client, sock, dgram, stop, err := startUsernet(ctx, l.Instance)
 		if err != nil {
 			return nil, err
 		}
-		l.usernetClient, l.usernetStop, qCfg.UsernetQEMUSock = client, stop, sock
+		l.usernetClient, l.usernetStop, qCfg.UsernetQEMUSock, qCfg.UsernetDgram = client, stop, sock, dgram
 		defer func() {
+			// QEMU has its own copy once started.
+			if dgram != nil {
+				dgram.Close()
+			}
 			if l.qCmd == nil {
 				stop()
 			}
@@ -400,7 +415,7 @@ func (l *LimaQemuDriver) Start(ctx context.Context) (chan error, error) {
 	}
 
 	var qArgsFinal []string
-	applier := &qArgTemplateApplier{}
+	applier := &qArgTemplateApplier{dgram: qCfg.UsernetDgram}
 	for _, unapplied := range qArgs {
 		applied, err := applier.applyTemplate(unapplied)
 		if err != nil {
@@ -900,6 +915,8 @@ func (l *LimaQemuDriver) GuestAgentConn(ctx context.Context) (net.Conn, string, 
 
 type qArgTemplateApplier struct {
 	files []*os.File
+	// dgram is the file fd_dgram passes to QEMU.
+	dgram *os.File
 }
 
 func (a *qArgTemplateApplier) applyTemplate(qArg string) (string, error) {
@@ -937,6 +954,13 @@ func (a *qArgTemplateApplier) applyTemplate(qArg string) (string, error) {
 				panic(fmt.Errorf("fd_connect: %w", err))
 			}
 			return res
+		},
+		"fd_dgram": func() (string, error) {
+			if a.dgram == nil {
+				return "", errors.New("fd_dgram: no datagram socket")
+			}
+			a.files = append(a.files, a.dgram)
+			return strconv.Itoa(len(a.files) + 2), nil
 		},
 	}
 	tmpl, err := template.New("").Funcs(funcMap).Parse(qArg)

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Linux: a VM could lose its network and stop in the middle of `agent-vm
+  setup` or any download (`exit status 255`, the VM Stopped), with QEMU
+  10.2 and a KVM host. QEMU aborted on `net_fill_rstate: Assertion 'size ==
+  0' failed`, a bug of its `socket` network backend, which handled a failed
+  read of the stream badly. The VMs' network now goes through QEMU's `dgram`
+  backend (QEMU 7.2 or later): no stream, nothing to lose. An older QEMU keeps
+  the former backend, and so does Windows (it has no unix datagram sockets).
+
 ## 0.3.1
 
 ### Added
