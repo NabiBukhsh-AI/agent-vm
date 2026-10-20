@@ -180,6 +180,9 @@ func TestSetupWizard(t *testing.T) {
 	if got := on(exportsOf(t, stdin)); got != "opencode,code-server,code-opencode" {
 		t.Errorf("opencode extension: %s", got)
 	}
+	if !strings.Contains(te.out(), "Extension only (OpenCode keeps the CLI, required by its extension)") {
+		t.Errorf("prompt not shown: %s", te.out())
+	}
 }
 
 // code-server makes the default memory 4, but --memory wins. No terminal:
