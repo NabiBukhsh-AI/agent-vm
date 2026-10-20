@@ -94,6 +94,21 @@ func TestHelp(t *testing.T) {
 			"  ~/.agent-vm/network               What the VMs may reach (above)\n",
 			"  ~/.agent-vm/guarded               More files to ask about (above)\n",
 			"  licenses           Print the licenses of agent-vm and of what is built into it\n",
+			// 0.4's named VMs.
+			"  --name NAME        The VM called NAME, not the folder's own, so that a\n" +
+				"                     folder can have several. It belongs to the folder it is\n" +
+				"                     made in and runs from there only ('rm NAME' to give it\n" +
+				"                     up, --reset to make it again). NAME: lowercase letters,\n" +
+				"                     digits and dashes, at most 40 characters, not ending in\n" +
+				"                     a dash and 8 hex digits, not 'base' nor 'base-...'.\n" +
+				"  --no-shares        With --name, when the VM is made: it shares nothing (as\n" +
+				"                     --scratch), is kept, and runs from any folder. It never\n" +
+				"                     gets shares. The folder's path is made in the VM as an\n" +
+				"                     empty working folder. ~/.agent-vm/env and runtime.sh go\n" +
+				"                     in, the project's files do not.\n",
+			"  agent-vm --name agent2 claude              # A second VM on this folder\n",
+			"  agent-vm --name sandbox --no-shares claude # Nothing shared, kept, from any folder\n",
+			"  agent-vm stop agent2                       # Stop a VM by name (see 'list')\n",
 		} {
 			s = strings.Replace(s, cut, "", 1)
 		}

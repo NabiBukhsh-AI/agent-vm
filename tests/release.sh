@@ -73,9 +73,9 @@ check "no argument prints the usage (exit 2)" "$?" "2"
 # section set to $V, committed and pushed.
 RR="$SB/repo"; RO="$SB/origin.git"; RB="$SB/bin"
 mkdir -p "$RR/www/public" "$RB"
-cp -R "$SELF_DIR/release.sh" "$SELF_DIR/agent-vm.sh" "$SELF_DIR/agent-vm.setup.sh" "$SELF_DIR/runtime.example.sh" \
+cp -R "$SELF_DIR/release.sh" "$SELF_DIR/agent-vm.sh" "$SELF_DIR/runtime.example.sh" \
   "$SELF_DIR/LICENSE" "$SELF_DIR/NOTICE" "$SELF_DIR/THIRD_PARTY_LICENSES" "$SELF_DIR/README.md" \
-  "$SELF_DIR/tests" "$SELF_DIR/scripts" "$SELF_DIR/packaging" "$RR/"
+  "$SELF_DIR/tests" "$SELF_DIR/scripts" "$SELF_DIR/packaging" "$SELF_DIR/provision" "$RR/"
 cp "$SELF_DIR/www/public/install.sh" "$RR/www/public/"
 printf 'NEXT_VERSION := %s\n' "$V" > "$RR/Makefile"
 printf '# Changelog\n\n## %s\n\n- notes\n' "$V" > "$RR/CHANGELOG.md"

@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
+	agentvm "github.com/sylvinus/agent-vm"
 	"github.com/sylvinus/agent-vm/internal/cli"
-	"github.com/sylvinus/agent-vm/internal/limaembed"
 )
 
 // extraPath goes first on PATH, for this process and what it starts (the
@@ -20,8 +20,6 @@ func main() {
 		os.Setenv("PATH", extraPath+string(os.PathListSeparator)+p)
 	}
 	// Lima's libraries start this executable again for its hostagent.
-	if limaembed.Run(os.Args[1:]) {
-		return
-	}
+	agentvm.RunHelper()
 	os.Exit(cli.Main(os.Args[1:], cli.Stdio()))
 }

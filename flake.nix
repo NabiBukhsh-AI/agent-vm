@@ -42,14 +42,17 @@
           src = self;
 
           # The downloaded modules only: a vendor folder would hold
-          # third_party/ too (go.mod's replaces), and change with each patch.
+          # third_party/ too, and change with each patch.
           proxyVendor = true;
           # Changes with go.mod and go.sum: set pkgs.lib.fakeHash here, build,
           # and nix prints the new one. release.sh refuses a release when
           # this checksum of `cat go.mod go.sum` is not the current one:
           # update it with the hash.
-          # go.mod+go.sum: 0d831936e2c268c65229802f0d5026b4aba48507157f9b6a034225b64408a24e
-          vendorHash = "sha256-zfAasYQEKqcrGi4OI3UKJyq3VoUCmNE5lU4JKPtJDmc=";
+          # go.mod+go.sum: c31ced3cfd926565196a2feef87e7326d79cbf8ee00352a073bc529115b06932
+          # 0.4.0 moved Lima and the others into this module: the hash was not
+          # computed (no Nix where it was changed). Build, and put the one nix
+          # prints here.
+          vendorHash = pkgs.lib.fakeHash;
 
           subPackages = [ "cmd/agent-vm" ];
           tags = pkgs.lib.splitString "," (makeVar "TAGS");
@@ -58,7 +61,7 @@
             "-s"
             "-w"
             "-X github.com/sylvinus/agent-vm/internal/version.Version=${makeVar "NEXT_VERSION"}"
-            "-X github.com/lima-vm/lima/v2/pkg/version.Version=${limaVersion}"
+            "-X github.com/sylvinus/agent-vm/third_party/lima/pkg/version.Version=${limaVersion}"
             # QEMU comes with it, first on its PATH (cmd/agent-vm/main.go), as
             # nixpkgs' lima does with a wrapper: a wrapped binary would make
             # `agent-vm install` link past the wrapper. qemu_kvm, this host's
@@ -85,8 +88,8 @@
               assets = "internal/limaembed/assets";
             in
             ''
-              go build -trimpath -ldflags "-s -w -X github.com/lima-vm/lima/v2/pkg/version.Version=${limaVersion}" \
-                -o ${assets}/lima-guestagent.Linux-${guestArch} github.com/lima-vm/lima/v2/cmd/lima-guestagent
+              go build -trimpath -ldflags "-s -w -X github.com/sylvinus/agent-vm/third_party/lima/pkg/version.Version=${limaVersion}" \
+                -o ${assets}/lima-guestagent.Linux-${guestArch} ./third_party/lima/cmd/lima-guestagent
               gzip -9 -n -f ${assets}/lima-guestagent.Linux-${guestArch}
               rm -rf ${assets}/templates
               cp -R third_party/lima/templates ${assets}/templates

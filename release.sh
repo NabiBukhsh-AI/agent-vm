@@ -455,6 +455,8 @@ ok "LICENSE, NOTICE and THIRD_PARTY_LICENSES are there"
 # flake.nix's vendorHash is of the Go dependencies: it notes the checksum of
 # go.mod and go.sum it was made for.
 if [ -f flake.nix ]; then
+  ! grep -q '^[[:space:]]*vendorHash = pkgs.lib.fakeHash;' flake.nix \
+    || die "flake.nix's vendorHash is pkgs.lib.fakeHash: build with Nix and put the hash it prints there (see the comment)"
   mods="$(cat go.mod go.sum | sha256_of /dev/stdin)"
   grep -q "go.mod+go.sum: $mods\$" flake.nix \
     || die "flake.nix's vendorHash is not for this go.mod and go.sum: update it and its 'go.mod+go.sum: $mods' line (see the comment there)"
@@ -489,7 +491,7 @@ case "$ci" in
   running) die "the CI workflow is still running on ${head:0:12}" ;;
   *)       die "unexpected CI state for ${head:0:12}: $ci" ;;
 esac
-for f in agent-vm.sh agent-vm.setup.sh runtime.example.sh release.sh tests/*.sh scripts/*; do
+for f in agent-vm.sh provision/agent-vm.setup.sh runtime.example.sh release.sh tests/*.sh scripts/*; do
   bash -n "$f" || die "syntax error in $f"
 done
 sh -n www/public/install.sh || die "syntax error in www/public/install.sh"

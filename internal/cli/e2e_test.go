@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lima-vm/lima/v2/pkg/instance"
+	"github.com/sylvinus/agent-vm/third_party/lima/pkg/instance"
 
 	"github.com/sylvinus/agent-vm/internal/state"
 	"github.com/sylvinus/agent-vm/internal/vm"
@@ -122,11 +122,20 @@ func TestE2E(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "the project share is not mounted") || !strings.Contains(out, "v2, longer") {
 		t.Errorf("lost share: %d %s", code, out)
 	}
+	// A named VM that shares nothing: the folder's path is made in it, empty,
+	// and it is the VM's own, kept.
+	code, out = run(proj, "--name", "sandbox", "--no-shares", "run", "sh", "-c", `pwd; test ! -e from-vm && echo EMPTY`)
+	if code != 0 || !strings.Contains(out, proj+"\n") || !strings.Contains(out, "EMPTY") {
+		t.Errorf("named VM, no shares: %d\n%s", code, out)
+	}
+	if code, out := run(proj, "stop", "sandbox"); code != 0 {
+		t.Errorf("stop sandbox: %d\n%s", code, out)
+	}
 	// The hostagent killed under the VM: with QEMU, the VM runs on, cut off.
 	// The next run stops it and starts it again; so does stop. With vz, the
 	// VM goes with the hostagent.
 	st := state.Dir(filepath.Join(home, ".agent-vm"))
-	b, err := vm.NewLima(LimaHome(st), string(st))
+	b, err := vm.NewLima(LimaHome(st), st.VMs(), string(st))
 	if err != nil {
 		t.Fatal(err)
 	}

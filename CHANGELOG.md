@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+### Added
+
+- Named VMs: `agent-vm --name agent2 claude` runs a second VM on a folder,
+  called `agent2`, next to the folder's own. It belongs to the folder it is
+  made in and runs from there only: from another folder it stops, naming the
+  folder (`agent-vm rm agent2` gives it up, `--reset` makes it again, bound
+  anew). `stop NAME` and `rm NAME` reach it; `list` marks the ones of the
+  current folder with `>`. A name is lowercase letters, digits and dashes, at
+  most 40 characters, not `base` nor `base-…`, nor ending in a dash and 8 hex
+  digits (which every project's VM does).
+- `--no-shares`, with `--name`: a VM that shares nothing, like `--scratch`,
+  but kept, and usable from any folder (`agent-vm --name sandbox --no-shares
+  claude`). It never gets shares; the folder's path is made in the VM as an
+  empty working folder. `--scratch` is still `--no-shares --rm` with a name of
+  its own; `--scratch --name` is a usage error.
+- agent-vm is a Go library too, for programs that run their own agent in a VM
+  per project: `github.com/sylvinus/agent-vm` (`Open`, `Setup`, `ProjectVM`,
+  `Ensure`, `Exec`), with `provision` (what the base VM is built from),
+  `policy` (what the VMs may reach, and the files they may not change
+  unasked) and `agents`. The command line is built on it. It never writes to a
+  terminal nor reads an `AGENT_VM_*` variable: what it tells goes to a callback,
+  what it asks to an `Asker`. Experimental until a program other than
+  agent-vm uses it. `examples/consumer` is such a program;
+  `go run github.com/sylvinus/agent-vm/cmd/agent-vm-assets` makes the guest
+  agent and templates it embeds.
+
+### Changed
+
+- Each VM has a folder of its own, `~/.agent-vm/vms/<name>/`: Lima's files
+  for it (`lima/`), what agent-vm knows of it (`metadata.json`: the base it
+  was cloned from, its terminfo, its `--scratch` run), the policies it
+  booted with (`policy.json`) and the single files of `~/.agent-vm/volumes`
+  staged for it (`file-mounts/`). Deleting a VM deletes the folder, so
+  nothing of a VM outlives it. `~/.agent-vm/lima` keeps only what Lima
+  shares between VMs (`_config`, `_networks`). The `.agent-vm-*` files in
+  `~/.agent-vm` and `~/.agent-vm/file-mounts` are gone.
+- The first command that changes VMs moves 0.3.0's: the VMs are renamed to
+  their new place (their disks keep sharing blocks with the base), the
+  markers become `metadata.json`. A running VM cannot move: on a terminal you
+  are asked whether to stop it, else it moves next time. Until then
+  `agent-vm list` says some wait. There is no way back: 0.3.0 sees no VM after
+  the move. `ssh_config` lines in `~/.ssh/config` become
+  `Include ~/.agent-vm/vms/*/lima/ssh.config`.
+- The network and guarded-files policies a VM boots with are written to its
+  `policy.json`, which its host agent reads: the files in `~/.agent-vm` are
+  read by the command that starts the VM, not by the host agent.
+- Lima, sshocker, pkg/sftp and gvisor-tap-vsock are packages of agent-vm's
+  module (`third_party/`, upstream plus `patches/`), not replaced modules: a
+  program that imports agent-vm gets them patched.
+
 ## 0.3.1
 
 ### Added
