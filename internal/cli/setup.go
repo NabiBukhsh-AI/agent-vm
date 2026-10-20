@@ -55,8 +55,9 @@ Options:
                       'code-claude', 'code-opencode', 'code-codex' and 'code-vibe' add that
                       agent's extension, and code-server with it. Each
                       extension brings its own copy of the agent: 'claude',
-                      'opencode', 'codex' and 'vibe' are the command-line ones, for
-                      'agent-vm claude' and the others.
+                      'codex' and 'vibe' are the command-line ones, for
+                      'agent-vm claude' and the others (OpenCode's extension
+                      requires its command-line tool, which is installed with it).
                       Selecting codex or pi also installs node (npm). So does
                       mcp-chrome when chromium and an agent are selected
                       (npx). mcp-playwright does not: list node yourself.
@@ -192,9 +193,12 @@ func (e *app) setupCmd(ctx context.Context, args []string) int {
 			case f == "default":
 				in.set(defaultSoftware...)
 			case f == "none":
-			case f == "code-claude" || f == "code-opencode" || f == "code-codex" || f == "code-vibe":
+			case f == "code-claude" || f == "code-codex" || f == "code-vibe":
 				// An extension needs the editor.
 				in.set(f, "code-server")
+			case f == "code-opencode":
+				// OpenCode's extension requires both the editor and the OpenCode CLI.
+				in.set(f, "code-server", "opencode")
 			case contains(software, f):
 				in.set(f)
 			default:
@@ -357,13 +361,17 @@ func (e *app) askCodeExtensions(in install) {
 		return
 	}
 	fmt.Fprintf(e.io.Stderr, "  %s in the editor:\n", strings.Join(names, ", "))
-	choice := e.ui.AskChoice("Pick one", 1, "Extension and command line (agent-vm claude...)", "Extension only", "Command line only")
+	promptExtOnly := "Extension only"
+	if in["opencode"] {
+		promptExtOnly = "Extension only (OpenCode keeps the CLI, required by its extension)"
+	}
+	choice := e.ui.AskChoice("Pick one", 1, "Extension and command line (agent-vm claude...)", promptExtOnly, "Command line only")
 	if choice == 3 {
 		return
 	}
 	in["code-claude"], in["code-opencode"], in["code-codex"], in["code-vibe"] = in["claude"], in["opencode"], in["codex"], in["vibe"]
 	if choice == 2 {
-		in["claude"], in["opencode"], in["codex"], in["vibe"] = false, false, false, false
+		in["claude"], in["codex"], in["vibe"] = false, false, false
 	}
 }
 

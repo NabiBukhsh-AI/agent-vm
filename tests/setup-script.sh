@@ -110,6 +110,7 @@ check "sshfs wrapper: an older sshfs gets the arguments unchanged" \
 # config (managed settings, MCP servers) is written. The lines setup derives
 # it with, run as setup does.
 has_block="$(awk '/^HAS_CLAUDE=0 HAS_OPENCODE=0 HAS_CODEX=0 HAS_VIBE=0$/,/HAS_VIBE=1$/' "$SETUP_SH")"
+# has derives the HAS_* flags for the given set of agent install flags.
 # shellcheck disable=SC2034 # read by the eval'd block
 has() { ( INSTALL_CLAUDE="$1" INSTALL_CODE_CLAUDE="$2" INSTALL_OPENCODE="$3" INSTALL_CODE_OPENCODE="$4" INSTALL_CODEX="$5" INSTALL_CODE_CODEX="$6" INSTALL_VIBE="$7" INSTALL_CODE_VIBE="$8"
           eval "$has_block"; echo "$HAS_CLAUDE$HAS_OPENCODE$HAS_CODEX$HAS_VIBE" ); }

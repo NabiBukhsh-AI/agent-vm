@@ -70,6 +70,7 @@ func on(m map[string]string) string {
 	return strings.Join(out, ",")
 }
 
+// TestSetupPreinstall verifies --preinstall flag combinations.
 func TestSetupPreinstall(t *testing.T) {
 	for _, c := range []struct {
 		args []string
@@ -80,7 +81,7 @@ func TestSetupPreinstall(t *testing.T) {
 		{[]string{"--preinstall=none"}, ""},
 		{[]string{"--preinstall=all"}, strings.Join(software, ",")},
 		{[]string{"--preinstall=python, docker,claude"}, "python,docker,claude"},
-		{[]string{"--preinstall=code-opencode"}, "code-server,code-opencode"},
+		{[]string{"--preinstall=code-opencode"}, "opencode,code-server,code-opencode"},
 		{[]string{"--preinstall=code-vibe"}, "code-server,code-vibe"},
 		// Codex needs npm: node goes in, and it is said.
 		{[]string{"--preinstall=codex"}, "node,codex"},
@@ -133,6 +134,7 @@ func wizardRun(t *testing.T, answers ...string) (*testEnv, []string) {
 	return te, stdin
 }
 
+// TestSetupWizard verifies interactive setup wizard choices and defaults.
 func TestSetupWizard(t *testing.T) {
 	// Enter everywhere: the default set and resources.
 	te, stdin := wizardRun(t)
@@ -166,7 +168,7 @@ func TestSetupWizard(t *testing.T) {
 		t.Errorf("output: %s", te.out())
 	}
 
-	// OpenCode as extension only
+	// OpenCode as extension only (keeps the required OpenCode CLI)
 	te, stdin = wizardRun(t,
 		"n",                     // the default set
 		"n", "y", "n", "n", "", // Claude, OpenCode, Codex, Vibe, Pi
@@ -175,7 +177,7 @@ func TestSetupWizard(t *testing.T) {
 		"n", "n", "", "", "", // Python, Node, Ruby, Rust, Go
 		"", // resources
 	)
-	if got := on(exportsOf(t, stdin)); got != "code-server,code-opencode" {
+	if got := on(exportsOf(t, stdin)); got != "opencode,code-server,code-opencode" {
 		t.Errorf("opencode extension: %s", got)
 	}
 }
