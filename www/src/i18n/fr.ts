@@ -671,7 +671,7 @@ export const fr: Dictionary = {
       ['MCP', 'Chrome DevTools MCP, câblé dans chaque agent installé sauf Pi (pas de support MCP)', 'mcp-chrome', 'oui'],
       ['MCP', 'Playwright MCP, réutilisant le même Chromium', 'mcp-playwright', 'non'],
       ['Éditeur', 'code-server (VS Code dans le navigateur, pour `agent-vm code`), thème sombre, GitHub Copilot désactivé, sans télémétrie', 'code-server', 'non'],
-      ['Éditeur', 'L\'extension Claude Code, Codex ou Mistral Vibe, chacune démarrant sans demande de permission, avec code-server', 'code-claude, code-codex, code-vibe', 'non'],
+      ['Éditeur', 'L\'extension Claude Code, OpenCode, Codex ou Mistral Vibe, chacune démarrant sans demande de permission, avec code-server', 'code-claude, code-opencode, code-codex, code-vibe', 'non'],
     ],
     contentsCode:
       'agent-vm setup --preinstall=default                  # sans question\nagent-vm setup --preinstall=default,rust             # avec Rust en plus\nagent-vm setup --preinstall=python,docker,claude     # Claude seul, minimal\nagent-vm setup --preinstall=default,code-claude      # avec l\'éditeur\nagent-vm setup --disk 50 --memory 16 --cpus 8        # une image plus grosse',

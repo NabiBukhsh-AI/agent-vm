@@ -80,6 +80,7 @@ func TestSetupPreinstall(t *testing.T) {
 		{[]string{"--preinstall=none"}, ""},
 		{[]string{"--preinstall=all"}, strings.Join(software, ",")},
 		{[]string{"--preinstall=python, docker,claude"}, "python,docker,claude"},
+		{[]string{"--preinstall=code-opencode"}, "code-server,code-opencode"},
 		{[]string{"--preinstall=code-vibe"}, "code-server,code-vibe"},
 		// Codex needs npm: node goes in, and it is said.
 		{[]string{"--preinstall=codex"}, "node,codex"},
@@ -163,6 +164,19 @@ func TestSetupWizard(t *testing.T) {
 	if !strings.Contains(te.out(), "Node.js 24: yes (Chrome DevTools MCP uses npx)") || !strings.Contains(te.out(), "  agent-vm code\n") ||
 		strings.Contains(te.out(), "  agent-vm claude\n") {
 		t.Errorf("output: %s", te.out())
+	}
+
+	// OpenCode as extension only
+	te, stdin = wizardRun(t,
+		"n",                     // the default set
+		"n", "y", "n", "n", "", // Claude, OpenCode, Codex, Vibe, Pi
+		"y", "2", // code-server, extension only
+		"n", "n", "n", // Docker, Chromium, gh
+		"n", "n", "", "", "", // Python, Node, Ruby, Rust, Go
+		"", // resources
+	)
+	if got := on(exportsOf(t, stdin)); got != "code-server,code-opencode" {
+		t.Errorf("opencode extension: %s", got)
 	}
 }
 
